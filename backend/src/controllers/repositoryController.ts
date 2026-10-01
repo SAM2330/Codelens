@@ -1,7 +1,6 @@
 import { Request, Response } from "express";
-import { getRepository ,
-         getRepositoryTree,
-         getFileContent} from "../services/githubService";
+import { getRepository } from "../services/githubService";
+import { downloadRepository } from "../services/repositoryService";
 
 export async function analyzeRepository(req: Request, res: Response) {
     try {
@@ -36,32 +35,32 @@ export async function analyzeRepository(req: Request, res: Response) {
 
         const repository = await getRepository(owner, repo);
 
-        const tree = await getRepositoryTree(
+        const directory = await downloadRepository(
             owner,
             repo,
             repository.default_branch
         );
-        const firstFile = tree[0];
 
-        const content = await getFileContent(
-            owner,
-            repo,
-            firstFile.path
-        );
+        const files = directory.files
+            .filter((file) => !file.type)
+            .slice(0, 100)
+            .map((file) => ({
+                path: file.path,
+                size: file.uncompressedSize
+            }));
 
         res.json({
-    repository,
-    file: {
-        path: firstFile.path,
-        content
-    }
-});
+            repository,
+            files
+        });
     } catch (error) {
-    console.error(error);
+        console.error(error);
 
-    res.status(500).json({
-        message: "Failed to analyze repository",
-        error: error instanceof Error ? error.message : "Unknown error"
-    });
+        res.status(500).json({
+            message: "Failed to analyze repository",
+            error: error instanceof Error
+                ? error.message
+                : "Unknown error"
+        });
     }
 }
