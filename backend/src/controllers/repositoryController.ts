@@ -63,10 +63,21 @@ const repositoryFiles: RepositoryFile[] = await Promise.all(
 );
 
 const analyzedFiles = repositoryFiles.map(analyzeFile);
+        // res.json({
+        //     repository,
+        //     files:analyzedFiles
+        // });
         res.json({
-            repository,
-            files:analyzedFiles
-        });
+    repository,
+    files: analyzedFiles.map((file) => ({
+        path: file.path,
+        language: file.language,
+        type: file.type,
+        area: file.area,
+        imports: file.imports,
+        structure: file.structure
+    }))
+});
     } catch (error) {
         console.error(error);
 

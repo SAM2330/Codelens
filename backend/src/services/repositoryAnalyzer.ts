@@ -1,4 +1,5 @@
-import { analyzeImports, ImportInfo } from "./codeAnalyzer";
+import { analyzeImports, ImportInfo , CodeStructure ,analyzeCodeStructure} from "./codeAnalyzer";
+import { analyzeAST } from "./astAnalyzer";
 export type RepositoryFile = {
     path: string;
     size: number;
@@ -10,6 +11,7 @@ export type AnalyzedFile = RepositoryFile & {
     type: string;
     area: string;
     imports: ImportInfo[];
+    structure: CodeStructure;
 };
 export function analyzeFile(file: RepositoryFile): AnalyzedFile {
     const path = file.path.toLowerCase();
@@ -69,7 +71,9 @@ export function analyzeFile(file: RepositoryFile): AnalyzedFile {
     language,
     type,
     area,
-    imports: analyzeImports(file.content)
+    imports: analyzeImports(file.content),
+    structure: analyzeAST(file.path,file.content)
+
 };
 }
 const ignoredDirectories = [
@@ -96,6 +100,18 @@ const ignoredExtensions = [
     ".woff2",
     ".ttf"
 ];
+function isCodeFile(path: string): boolean {
+    const codeExtensions = [
+        ".ts",
+        ".tsx",
+        ".js",
+        ".jsx"
+    ];
+
+    return codeExtensions.some((extension) =>
+        path.toLowerCase().endsWith(extension)
+    );
+}
 
 export function shouldAnalyzeFile(path: string): boolean {
     const normalizedPath = path.toLowerCase();
@@ -113,6 +129,10 @@ export function shouldAnalyzeFile(path: string): boolean {
             normalizedPath.endsWith(extension)
         )
     ) {
+        return false;
+    }
+
+    if (!isCodeFile(path)) {
         return false;
     }
 
