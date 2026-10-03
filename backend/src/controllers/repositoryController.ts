@@ -6,6 +6,7 @@ import {
     RepositoryFile,
     shouldAnalyzeFile
 } from "../services/repositoryAnalyzer";
+import { buildDependencyGraph } from "../services/dependencyAnalyzer";
 
 export async function analyzeRepository(req: Request, res: Response) {
     try {
@@ -63,6 +64,7 @@ const repositoryFiles: RepositoryFile[] = await Promise.all(
 );
 
 const analyzedFiles = repositoryFiles.map(analyzeFile);
+const dependencies = buildDependencyGraph(analyzedFiles);
         // res.json({
         //     repository,
         //     files:analyzedFiles
@@ -76,7 +78,8 @@ const analyzedFiles = repositoryFiles.map(analyzeFile);
         area: file.area,
         imports: file.imports,
         structure: file.structure
-    }))
+    })),
+    dependencies
 });
     } catch (error) {
         console.error(error);

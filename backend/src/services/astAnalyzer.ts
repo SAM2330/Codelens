@@ -1,9 +1,20 @@
 
 import { parse } from "@babel/parser";
 
+export type ASTSymbol = {
+    name: string;
+    type: string;
+    startLine: number;
+    endLine: number;
+};
+
 export type ASTAnalysis = {
-    functions: string[];
-    classes: string[];
+    functions: ASTSymbol[];
+    classes: ASTSymbol[];
+    interfaces: ASTSymbol[];
+    types: ASTSymbol[];
+    imports: ASTSymbol[];
+    exports: ASTSymbol[];
 };
 
 export function analyzeAST(
@@ -13,66 +24,148 @@ export function analyzeAST(
     const ast = parse(content, {
         sourceType: "unambiguous",
         sourceFilename: fileName,
-        plugins: [
-            "typescript",
-            "jsx"
-        ]
+        plugins: ["typescript", "jsx"]
     });
 
-    const functions: string[] = [];
-    const classes: string[] = [];
+    const functions: ASTSymbol[] = [];
+    const classes: ASTSymbol[] = [];
+    const interfaces: ASTSymbol[] = [];
+    const types: ASTSymbol[] = [];
+    const imports: ASTSymbol[] = [];
+    const exports: ASTSymbol[] = [];
+
+    function addSymbol(
+        collection: ASTSymbol[],
+        name: string,
+        type: string,
+        node: any
+    ) {
+        if (!node.loc) return;
+
+        collection.push({
+            name,
+            type,
+            startLine: node.loc.start.line,
+            endLine: node.loc.end.line
+        });
+    }
 
     function visit(node: any) {
-        if (!node || typeof node !== "object") {
-            return;
+        if (!node || typeof node !== "object") return;
+
+        if (node.type === "FunctionDeclaration" && node.id) {
+            addSymbol(
+                functions,
+                node.id.name,
+                "function",
+                node
+            );
         }
 
-        // Regular function declarations
-        if (
-            node.type === "FunctionDeclaration" &&
-            node.id
-        ) {
-            functions.push(node.id.name);
+        if (node.type === "ClassDeclaration" && node.id) {
+            addSymbol(
+                classes,
+                node.id.name,
+                "class",
+                node
+            );
         }
 
-        // Classes
-        if (
-            node.type === "ClassDeclaration" &&
-            node.id
-        ) {
-            classes.push(node.id.name);
-        }
-
-        // Arrow functions and function expressions
         if (
             node.type === "VariableDeclarator" &&
-            node.id?.type === "Identifier"
-        ) {
-            if (
+            node.id?.type === "Identifier" &&
+            (
                 node.init?.type === "ArrowFunctionExpression" ||
                 node.init?.type === "FunctionExpression"
-            ) {
-                functions.push(node.id.name);
-            }
+            )
+        ) {
+            addSymbol(
+                functions,
+                node.id.name,
+                "function",
+                node
+            );
         }
 
-        // Class methods
         if (
             node.type === "ClassMethod" &&
             node.key?.type === "Identifier"
         ) {
-            functions.push(node.key.name);
+            addSymbol(
+                functions,
+                node.key.name,
+                "method",
+                node
+            );
         }
 
-        // Object methods
         if (
             node.type === "ObjectMethod" &&
             node.key?.type === "Identifier"
         ) {
-            functions.push(node.key.name);
+            addSymbol(
+                functions,
+                node.key.name,
+                "method",
+                node
+            );
         }
 
-        // Recursively visit child nodes
+        if (
+            node.type === "TSInterfaceDeclaration" &&
+            node.id
+        ) {
+            addSymbol(
+                interfaces,
+                node.id.name,
+                "interface",
+                node
+            );
+        }
+
+        if (
+            node.type === "TSTypeAliasDeclaration" &&
+            node.id
+        ) {
+            addSymbol(
+                types,
+                node.id.name,
+                "type",
+                node
+            );
+        }
+
+        if (node.type === "ImportDeclaration") {
+            const name =
+                node.source?.value || "unknown";
+
+            addSymbol(
+                imports,
+                name,
+                "import",
+                node
+            );
+        }
+
+        if (
+            node.type === "ExportNamedDeclaration" ||
+            node.type === "ExportDefaultDeclaration"
+        ) {
+            const declaration = node.declaration;
+
+            const name =
+                declaration?.id?.name ||
+                declaration?.name ||
+                "default";
+
+            addSymbol(
+                exports,
+                name,
+                "export",
+                node
+            );
+        }
+
         for (const key of Object.keys(node)) {
             if (
                 key === "loc" ||
@@ -100,23 +193,11 @@ export function analyzeAST(
     visit(ast.program);
 
     return {
-        functions: [...new Set(functions)],
-        classes: [...new Set(classes)]
+        functions,
+        classes,
+        interfaces,
+        types,
+        imports,
+        exports
     };
 }
-
-
-// console.log(
-//     analyzeAST(
-//         "test.ts",
-//         `
-//         function login(user: string) {
-//             return user;
-//         }
-
-//         function logout() {}
-
-//         class UserService {}
-//         `
-//     )
-// );

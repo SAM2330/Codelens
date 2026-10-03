@@ -1,5 +1,5 @@
 import { analyzeImports, ImportInfo , CodeStructure ,analyzeCodeStructure} from "./codeAnalyzer";
-import { analyzeAST } from "./astAnalyzer";
+import { analyzeAST, ASTAnalysis } from "./astAnalyzer";
 export type RepositoryFile = {
     path: string;
     size: number;
@@ -11,7 +11,7 @@ export type AnalyzedFile = RepositoryFile & {
     type: string;
     area: string;
     imports: ImportInfo[];
-    structure: CodeStructure;
+    structure: ASTAnalysis;
 };
 export function analyzeFile(file: RepositoryFile): AnalyzedFile {
     const path = file.path.toLowerCase();
