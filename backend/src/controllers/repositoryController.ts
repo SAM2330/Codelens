@@ -1,6 +1,11 @@
 import { Request, Response } from "express";
 import { getRepository } from "../services/githubService";
 import { downloadRepository } from "../services/repositoryService";
+import {
+    analyzeFile,
+    RepositoryFile,
+    shouldAnalyzeFile
+} from "../services/repositoryAnalyzer";
 
 export async function analyzeRepository(req: Request, res: Response) {
     try {
@@ -41,11 +46,11 @@ export async function analyzeRepository(req: Request, res: Response) {
             repository.default_branch
         );
 
-       const files = directory.files
+     const files = directory.files
     .filter((file) => file.type === "File")
-    .slice(0, 20);
+    .filter((file) => shouldAnalyzeFile(file.path));
 
-const analyzedFiles = await Promise.all(
+const repositoryFiles: RepositoryFile[] = await Promise.all(
     files.map(async (file) => {
         const content = await file.buffer();
 
@@ -57,6 +62,7 @@ const analyzedFiles = await Promise.all(
     })
 );
 
+const analyzedFiles = repositoryFiles.map(analyzeFile);
         res.json({
             repository,
             files:analyzedFiles
