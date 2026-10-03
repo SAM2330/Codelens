@@ -21,3 +21,18 @@ export async function downloadRepository(
 
     return directory;
 }
+
+export async function readRepositoryFile(
+    directory: unzipper.CentralDirectory,
+    path: string
+) {
+    const file = directory.files.find(
+        (file) => file.path === path
+    );
+
+    if (!file) {
+        throw new Error(`File not found: ${path}`);
+    }
+
+    return file.buffer();
+}

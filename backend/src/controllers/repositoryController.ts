@@ -41,17 +41,25 @@ export async function analyzeRepository(req: Request, res: Response) {
             repository.default_branch
         );
 
-        const files = directory.files
-            .filter((file) => !file.type)
-            .slice(0, 100)
-            .map((file) => ({
-                path: file.path,
-                size: file.uncompressedSize
-            }));
+       const files = directory.files
+    .filter((file) => file.type === "File")
+    .slice(0, 20);
+
+const analyzedFiles = await Promise.all(
+    files.map(async (file) => {
+        const content = await file.buffer();
+
+        return {
+            path: file.path,
+            size: file.uncompressedSize,
+            content: content.toString("utf-8")
+        };
+    })
+);
 
         res.json({
             repository,
-            files
+            files:analyzedFiles
         });
     } catch (error) {
         console.error(error);
