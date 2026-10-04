@@ -72,7 +72,16 @@ export function analyzeFile(file: RepositoryFile): AnalyzedFile {
     type,
     area,
     imports: analyzeImports(file.content),
-    structure: analyzeAST(file.path,file.content)
+    structure: isCodeFile(file.path)
+    ? analyzeAST(file.path, file.content)
+    : {
+        functions: [],
+        classes: [],
+        interfaces: [],
+        types: [],
+        imports: [],
+        exports: []
+    }
 
 };
 }
@@ -113,6 +122,22 @@ function isCodeFile(path: string): boolean {
     );
 }
 
+function isConfigFile(path: string): boolean {
+    const configFiles = [
+        "package.json",
+        "tsconfig.json",
+        "next.config.js",
+        "next.config.ts",
+        "next.config.mjs",
+        "vite.config.js",
+        "vite.config.ts",
+        "vite.config.mjs"
+    ];
+
+    const fileName = path.split("/").pop()?.toLowerCase();
+
+    return configFiles.includes(fileName || "");
+}
 export function shouldAnalyzeFile(path: string): boolean {
     const normalizedPath = path.toLowerCase();
 
@@ -131,10 +156,13 @@ export function shouldAnalyzeFile(path: string): boolean {
     ) {
         return false;
     }
-
-    if (!isCodeFile(path)) {
-        return false;
-    }
-
+if (isCodeFile(path)) {
     return true;
+}
+
+if (isConfigFile(path)) {
+    return true;
+}
+
+return false;
 }

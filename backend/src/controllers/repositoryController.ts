@@ -7,6 +7,8 @@ import {
     shouldAnalyzeFile
 } from "../services/repositoryAnalyzer";
 import { buildDependencyGraph } from "../services/dependencyAnalyzer";
+import { analyzeProject } from "../services/projectAnalyzer";
+import { analyzeArchitecture } from "../services/architectureAnalyzer";
 
 export async function analyzeRepository(req: Request, res: Response) {
     try {
@@ -65,12 +67,23 @@ const repositoryFiles: RepositoryFile[] = await Promise.all(
 
 const analyzedFiles = repositoryFiles.map(analyzeFile);
 const dependencies = buildDependencyGraph(analyzedFiles);
+const projectAnalysis = analyzeProject(analyzedFiles);
+const architecture = analyzeArchitecture(
+    projectAnalysis,
+    analyzedFiles,
+    dependencies
+);
         // res.json({
         //     repository,
         //     files:analyzedFiles
         // });
         res.json({
     repository,
+
+    project: projectAnalysis,
+
+    architecture,
+
     files: analyzedFiles.map((file) => ({
         path: file.path,
         language: file.language,
@@ -79,6 +92,7 @@ const dependencies = buildDependencyGraph(analyzedFiles);
         imports: file.imports,
         structure: file.structure
     })),
+
     dependencies
 });
     } catch (error) {
