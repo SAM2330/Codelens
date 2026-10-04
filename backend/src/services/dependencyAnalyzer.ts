@@ -70,19 +70,27 @@ function resolveImport(
         normalized.push(part);
     }
 
-    const basePath = normalized.join("/");
+    let basePath = normalized.join("/");
 
-    const possiblePaths = [
-        basePath,
-        `${basePath}.ts`,
-        `${basePath}.tsx`,
-        `${basePath}.js`,
-        `${basePath}.jsx`,
-        `${basePath}/index.ts`,
-        `${basePath}/index.tsx`,
-        `${basePath}/index.js`,
-        `${basePath}/index.jsx`
-    ];
+if (
+    basePath.endsWith(".js") ||
+    basePath.endsWith(".jsx") ||
+    basePath.endsWith(".ts") ||
+    basePath.endsWith(".tsx")
+) {
+    basePath = basePath.replace(/\.(js|jsx|ts|tsx)$/, "");
+}
+
+const possiblePaths = [
+    `${basePath}.ts`,
+    `${basePath}.tsx`,
+    `${basePath}.js`,
+    `${basePath}.jsx`,
+    `${basePath}/index.ts`,
+    `${basePath}/index.tsx`,
+    `${basePath}/index.js`,
+    `${basePath}/index.jsx`
+];
 
     for (const path of possiblePaths) {
         if (filePaths.has(path)) {

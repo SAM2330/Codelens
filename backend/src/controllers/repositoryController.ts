@@ -11,6 +11,7 @@ import { analyzeProject } from "../services/projectAnalyzer";
 import { analyzeArchitecture } from "../services/architectureAnalyzer";
 import { analyzeAPIs } from "../services/apiAnalyzer";
 import { analyzeDatabase } from "../services/databaseAnalyzer";
+import { analyzeCodeFlows } from "../services/codeFlowAnalyzer";
 
 export async function analyzeRepository(req: Request, res: Response) {
     try {
@@ -78,6 +79,11 @@ const architecture = analyzeArchitecture(
 const apiAnalysis = analyzeAPIs(analyzedFiles);
 
 const databaseAnalysis = analyzeDatabase(analyzedFiles);
+const codeFlows = analyzeCodeFlows(
+    analyzedFiles,
+    dependencies,
+    apiAnalysis
+);
         // res.json({
         //     repository,
         //     files:analyzedFiles
@@ -92,6 +98,8 @@ const databaseAnalysis = analyzeDatabase(analyzedFiles);
     api: apiAnalysis,
 
     database: databaseAnalysis,
+     
+    codeFlows,
 
     files: analyzedFiles.map((file) => ({
         path: file.path,
