@@ -9,6 +9,8 @@ import {
 import { buildDependencyGraph } from "../services/dependencyAnalyzer";
 import { analyzeProject } from "../services/projectAnalyzer";
 import { analyzeArchitecture } from "../services/architectureAnalyzer";
+import { analyzeAPIs } from "../services/apiAnalyzer";
+import { analyzeDatabase } from "../services/databaseAnalyzer";
 
 export async function analyzeRepository(req: Request, res: Response) {
     try {
@@ -73,6 +75,9 @@ const architecture = analyzeArchitecture(
     analyzedFiles,
     dependencies
 );
+const apiAnalysis = analyzeAPIs(analyzedFiles);
+
+const databaseAnalysis = analyzeDatabase(analyzedFiles);
         // res.json({
         //     repository,
         //     files:analyzedFiles
@@ -83,6 +88,10 @@ const architecture = analyzeArchitecture(
     project: projectAnalysis,
 
     architecture,
+
+    api: apiAnalysis,
+
+    database: databaseAnalysis,
 
     files: analyzedFiles.map((file) => ({
         path: file.path,
