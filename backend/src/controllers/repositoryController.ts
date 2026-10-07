@@ -17,6 +17,7 @@ import {
     GitAnalysis
 } from "../services/gitAnalyzer";
 import { analyzeStaticCode } from "../services/staticAnalyzer";
+import { analyzeSecurity } from "../services/securityAnalyzer";
 
 export async function analyzeRepository(req: Request, res: Response) {
     try {
@@ -111,6 +112,7 @@ const staticAnalysis = analyzeStaticCode(
 );
 
 console.log("7. Static analysis completed");
+const securityAnalysis = analyzeSecurity(analyzedFiles);
         // res.json({
         //     repository,
         //     files:analyzedFiles
@@ -131,6 +133,8 @@ console.log("7. Static analysis completed");
     git: gitAnalysis,
 
     static: staticAnalysis,
+    
+    security: securityAnalysis,
 
     files: analyzedFiles.map((file) => ({
         path: file.path,
