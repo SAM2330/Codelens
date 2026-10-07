@@ -6,8 +6,11 @@ export async function downloadRepository(
     branch: string
 ) {
     const response = await fetch(
-        `https://github.com/${owner}/${repo}/archive/refs/heads/${branch}.zip`
-    );
+    `https://github.com/${owner}/${repo}/archive/refs/heads/${branch}.zip`,
+    {
+        signal: AbortSignal.timeout(60000)
+    }
+);
 
     if (!response.ok) {
         throw new Error("Failed to download repository");

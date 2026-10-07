@@ -12,6 +12,11 @@ import { analyzeArchitecture } from "../services/architectureAnalyzer";
 import { analyzeAPIs } from "../services/apiAnalyzer";
 import { analyzeDatabase } from "../services/databaseAnalyzer";
 import { analyzeCodeFlows } from "../services/codeFlowAnalyzer";
+import {
+    analyzeGitHistory,
+    GitAnalysis
+} from "../services/gitAnalyzer";
+import { analyzeStaticCode } from "../services/staticAnalyzer";
 
 export async function analyzeRepository(req: Request, res: Response) {
     try {
@@ -43,14 +48,15 @@ export async function analyzeRepository(req: Request, res: Response) {
 
         const owner = parts[0];
         const repo = parts[1];
-
+console.log("1. Getting repository...");
         const repository = await getRepository(owner, repo);
-
+console.log("2. Downloading repository...");
         const directory = await downloadRepository(
             owner,
             repo,
             repository.default_branch
         );
+        console.log("2.Repository Downloaded");
 
      const files = directory.files
     .filter((file) => file.type === "File")
@@ -84,6 +90,27 @@ const codeFlows = analyzeCodeFlows(
     dependencies,
     apiAnalysis
 );
+console.log("4. Starting Git history...");
+let gitAnalysis : GitAnalysis = {
+    commits: [],
+    contributors: [],
+    hotFiles: [],
+    recentChanges: []
+};
+
+try {
+    gitAnalysis = await analyzeGitHistory(owner,repo);
+        console.log("5. Git history completed");
+    
+} catch (error) {
+    console.error("Git history analysis failed:", error);
+}
+console.log("6. Starting static analysis...");
+const staticAnalysis = analyzeStaticCode(
+    analyzedFiles
+);
+
+console.log("7. Static analysis completed");
         // res.json({
         //     repository,
         //     files:analyzedFiles
@@ -100,6 +127,10 @@ const codeFlows = analyzeCodeFlows(
     database: databaseAnalysis,
      
     codeFlows,
+
+    git: gitAnalysis,
+
+    static: staticAnalysis,
 
     files: analyzedFiles.map((file) => ({
         path: file.path,
