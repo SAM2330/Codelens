@@ -148,3 +148,9 @@ export interface RagContextResult {
     quotaExceeded?: boolean;
     message?: string;
 }
+
+export interface LlmAnswer {
+    answer: string;
+    model?: string;
+}
+

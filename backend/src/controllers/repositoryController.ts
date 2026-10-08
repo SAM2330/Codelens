@@ -35,6 +35,7 @@ import {
 } from "../db/repositories/repositoryDb";
 import { searchSimilarChunks } from "../services/vectorSearchService";
 import { retrieveContext } from "../services/ragService";
+import { generateRepositoryAnswer } from "../services/llmService";
 import { FullAnalysisResult } from "../types/database";
 
 export async function analyzeRepository(req: Request, res: Response) {
@@ -527,6 +528,84 @@ export async function getRepositoryContext(req: Request, res: Response) {
 
         return res.status(statusCode).json({
             message: "Failed to retrieve RAG context",
+            error: error instanceof Error ? error.message : "Unknown error"
+        });
+    }
+}
+
+export async function askRepository(req: Request, res: Response) {
+    try {
+        const rawId = req.params.id;
+        const id = Array.isArray(rawId) ? rawId[0] : rawId;
+
+        if (!id) {
+            return res.status(400).json({
+                message: "Repository ID is required"
+            });
+        }
+
+        const rawQuery = req.query.q;
+        const query = typeof rawQuery === "string" ? rawQuery.trim() : "";
+
+        if (!query) {
+            return res.status(400).json({
+                message: "Search query parameter 'q' is required"
+            });
+        }
+
+        // 1. Retrieve RAG context using existing RAG engine
+        const ragResult = await retrieveContext(id, query);
+
+        if (ragResult.notFound) {
+            return res.status(404).json({
+                message: ragResult.message || `Repository '${id}' not found.`
+            });
+        }
+
+        if (ragResult.quotaExceeded) {
+            return res.status(429).json({
+                message:
+                    ragResult.message ||
+                    "Gemini API quota exceeded (429 RESOURCE_EXHAUSTED). Please try again later."
+            });
+        }
+
+        // 2. If no context or sourceCount is 0, return clear no-context answer without calling LLM
+        if (
+            ragResult.hasNoEmbeddings ||
+            ragResult.sourceCount === 0 ||
+            !ragResult.context ||
+            ragResult.context.trim().length === 0
+        ) {
+            return res.json({
+                repositoryId: ragResult.repositoryId,
+                query: ragResult.query,
+                answer: "I couldn't find enough relevant code in the analyzed repository to answer this reliably."
+            });
+        }
+
+        // 3. Generate grounded answer via Gemini LLM service
+        const llmResult = await generateRepositoryAnswer(
+            query,
+            ragResult.context
+        );
+
+        return res.json({
+            repositoryId: ragResult.repositoryId,
+            query: ragResult.query,
+            answer: llmResult.answer
+        });
+    } catch (error) {
+        console.error("AI repository ask failed:", error);
+
+        const isQuota =
+            (error as any)?.isQuotaError || (error as any)?.status === 429;
+        const statusCode = isQuota ? 429 : 500;
+
+        return res.status(statusCode).json({
+            message: isQuota
+                ? "Gemini API quota exceeded (429 RESOURCE_EXHAUSTED). Please try again later."
+                : "Failed to generate AI answer for repository",
             error: error instanceof Error ? error.message : "Unknown error"
         });
     }

@@ -6,12 +6,14 @@ import {
     getRepositoryChunks,
     embedRepositoryChunks,
     searchRepositoryChunks,
-    getRepositoryContext
+    getRepositoryContext,
+    askRepository
 } from "../controllers/repositoryController";
 
 const router = Router();
 
 router.get("/", getRepositories);
+router.get("/:id/ask", askRepository);
 router.get("/:id/context", getRepositoryContext);
 router.get("/:id/search", searchRepositoryChunks);
 router.get("/:id/chunks", getRepositoryChunks);
