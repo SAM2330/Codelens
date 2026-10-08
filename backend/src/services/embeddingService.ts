@@ -308,3 +308,44 @@ export async function generateEmbeddingsForChunks(
         dimensions: EMBEDDING_DIMENSIONS
     };
 }
+
+export async function embedQueryText(query: string): Promise<number[]> {
+    if (!query || query.trim().length === 0) {
+        throw new Error("Query text must not be empty.");
+    }
+
+    const ai = getGenAIClient();
+
+    try {
+        const response = await ai.models.embedContent({
+            model: EMBEDDING_MODEL,
+            contents: query.trim(),
+            config: {
+                outputDimensionality: EMBEDDING_DIMENSIONS
+            }
+        });
+
+        const values =
+            response.embeddings?.[0]?.values ||
+            (response as any).embedding?.values;
+
+        if (!values || values.length !== EMBEDDING_DIMENSIONS) {
+            throw new Error(
+                `Expected ${EMBEDDING_DIMENSIONS}-dimensional embedding vector, got ${values?.length ?? 0}`
+            );
+        }
+
+        return values;
+    } catch (error) {
+        if (isQuotaExceededError(error)) {
+            const quotaErr = new Error(
+                "Gemini API quota exceeded (429 RESOURCE_EXHAUSTED). Please try again later."
+            );
+            (quotaErr as any).status = 429;
+            (quotaErr as any).isQuotaError = true;
+            throw quotaErr;
+        }
+
+        throw error;
+    }
+}

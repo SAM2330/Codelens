@@ -33,6 +33,8 @@ import {
     getChunksWithoutEmbeddings,
     saveChunkEmbeddings
 } from "../db/repositories/repositoryDb";
+import { searchSimilarChunks } from "../services/vectorSearchService";
+import { retrieveContext } from "../services/ragService";
 import { FullAnalysisResult } from "../types/database";
 
 export async function analyzeRepository(req: Request, res: Response) {
@@ -379,6 +381,152 @@ export async function embedRepositoryChunks(req: Request, res: Response) {
         console.error("Failed to generate repository embeddings:", error);
         return res.status(500).json({
             message: "Failed to generate repository embeddings",
+            error: error instanceof Error ? error.message : "Unknown error"
+        });
+    }
+}
+
+export async function searchRepositoryChunks(req: Request, res: Response) {
+    try {
+        const rawId = req.params.id;
+        const id = Array.isArray(rawId) ? rawId[0] : rawId;
+
+        if (!id) {
+            return res.status(400).json({
+                message: "Repository ID is required"
+            });
+        }
+
+        const rawQuery = req.query.q;
+        const query = typeof rawQuery === "string" ? rawQuery.trim() : "";
+
+        if (!query) {
+            return res.status(400).json({
+                message: "Search query parameter 'q' is required"
+            });
+        }
+
+        const limit = req.query.limit
+            ? parseInt(String(req.query.limit), 10)
+            : undefined;
+
+        const searchResult = await searchSimilarChunks(id, query, limit);
+
+        if (searchResult.notFound) {
+            return res.status(404).json({
+                message: searchResult.message || `Repository '${id}' not found.`
+            });
+        }
+
+        if (searchResult.hasNoEmbeddings) {
+            return res.json({
+                repositoryId: searchResult.repositoryId,
+                query: searchResult.query,
+                results: [],
+                message:
+                    searchResult.message ||
+                    "No embedded code chunks are available for this repository."
+            });
+        }
+
+        if (searchResult.quotaExceeded) {
+            return res.status(429).json({
+                message:
+                    searchResult.message ||
+                    "Gemini API quota exceeded (429 RESOURCE_EXHAUSTED). Please try again later."
+            });
+        }
+
+        return res.json({
+            repositoryId: searchResult.repositoryId,
+            query: searchResult.query,
+            results: searchResult.results
+        });
+    } catch (error) {
+        console.error("Vector search failed:", error);
+
+        const isQuota = (error as any)?.isQuotaError || (error as any)?.status === 429;
+        const statusCode = isQuota ? 429 : 500;
+
+        return res.status(statusCode).json({
+            message: "Failed to execute vector search",
+            error: error instanceof Error ? error.message : "Unknown error"
+        });
+    }
+}
+
+export async function getRepositoryContext(req: Request, res: Response) {
+    try {
+        const rawId = req.params.id;
+        const id = Array.isArray(rawId) ? rawId[0] : rawId;
+
+        if (!id) {
+            return res.status(400).json({
+                message: "Repository ID is required"
+            });
+        }
+
+        const rawQuery = req.query.q;
+        const query = typeof rawQuery === "string" ? rawQuery.trim() : "";
+
+        if (!query) {
+            return res.status(400).json({
+                message: "Search query parameter 'q' is required"
+            });
+        }
+
+        const maxChunks = req.query.maxChunks
+            ? parseInt(String(req.query.maxChunks), 10)
+            : req.query.limit
+            ? parseInt(String(req.query.limit), 10)
+            : undefined;
+
+        const candidateLimit = req.query.candidateLimit
+            ? parseInt(String(req.query.candidateLimit), 10)
+            : undefined;
+
+        const similarityThreshold = req.query.threshold
+            ? parseFloat(String(req.query.threshold))
+            : req.query.similarityThreshold
+            ? parseFloat(String(req.query.similarityThreshold))
+            : undefined;
+
+        const result = await retrieveContext(id, query, {
+            candidateLimit,
+            maxChunks,
+            similarityThreshold
+        });
+
+        if (result.notFound) {
+            return res.status(404).json({
+                message: result.message || `Repository '${id}' not found.`
+            });
+        }
+
+        if (result.quotaExceeded) {
+            return res.status(429).json({
+                message:
+                    result.message ||
+                    "Gemini API quota exceeded (429 RESOURCE_EXHAUSTED). Please try again later."
+            });
+        }
+
+        return res.json({
+            repositoryId: result.repositoryId,
+            query: result.query,
+            context: result.context,
+            sourceCount: result.sourceCount,
+            sources: result.sources,
+            ...(result.message && { message: result.message })
+        });
+    } catch (error) {
+        console.error("RAG context retrieval failed:", error);
+
+        const isQuota = (error as any)?.isQuotaError || (error as any)?.status === 429;
+        const statusCode = isQuota ? 429 : 500;
+
+        return res.status(statusCode).json({
+            message: "Failed to retrieve RAG context",
             error: error instanceof Error ? error.message : "Unknown error"
         });
     }

@@ -155,3 +155,4 @@ CREATE TABLE IF NOT EXISTS code_chunks (
 CREATE INDEX IF NOT EXISTS idx_code_chunks_analysis_id ON code_chunks(analysis_id);
 CREATE INDEX IF NOT EXISTS idx_code_chunks_file_path ON code_chunks(analysis_id, file_path);
 CREATE INDEX IF NOT EXISTS idx_code_chunks_repo_id ON code_chunks(repository_id);
+CREATE INDEX IF NOT EXISTS idx_code_chunks_embedding_cosine ON code_chunks USING hnsw (embedding vector_cosine_ops);

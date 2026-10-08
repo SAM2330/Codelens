@@ -95,5 +95,56 @@ export interface EmbeddingSummary {
     failedChunks: number;
     model: string;
     dimensions: number;
+    status?: "completed" | "quota_exceeded" | "partial" | "failed";
+    message?: string;
+}
+
+export interface VectorSearchResult {
+    id: string;
+    repositoryId: string;
+    filePath: string;
+    language: string;
+    symbol: string;
+    symbolType: string;
+    startLine: number;
+    endLine: number;
+    content: string;
+    similarity: number;
+}
+
+export interface VectorSearchResponse {
+    repositoryId: string;
+    query: string;
+    results: VectorSearchResult[];
+    message?: string;
+}
+
+export interface RagSource {
+    chunkId: string;
+    filePath: string;
+    symbol: string;
+    symbolType: string;
+    startLine: number;
+    endLine: number;
+    language: string;
+    similarity: number;
+    content: string;
+}
+
+export interface RagOptions {
+    candidateLimit?: number;
+    maxChunks?: number;
+    similarityThreshold?: number;
+}
+
+export interface RagContextResult {
+    repositoryId: string;
+    query: string;
+    context: string;
+    sourceCount: number;
+    sources: RagSource[];
+    notFound?: boolean;
+    hasNoEmbeddings?: boolean;
+    quotaExceeded?: boolean;
     message?: string;
 }

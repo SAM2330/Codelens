@@ -3,7 +3,8 @@ import {
     FullAnalysisResult,
     StoredRepository,
     AnalyzedFileDTO,
-    CodeChunk
+    CodeChunk,
+    VectorSearchResult
 } from "../../types/database";
 import {
     computeContentHash,
@@ -659,4 +660,90 @@ export async function saveChunkEmbeddings(
     } finally {
         client.release();
     }
+}
+
+export async function searchSimilarChunksByVector(
+    repositoryId: string,
+    queryEmbedding: number[],
+    limit: number = 8
+): Promise<VectorSearchResult[] | null> {
+    const pool = getPool();
+
+    // 1. Resolve repository by UUID, full_name, or github_id
+    const repoRes = await pool.query(
+        `SELECT id FROM repositories 
+         WHERE id::text = $1 OR full_name = $1 OR github_id::text = $1
+         LIMIT 1`,
+        [repositoryId]
+    );
+
+    if (repoRes.rows.length === 0) {
+        return null;
+    }
+
+    const resolvedRepoId = repoRes.rows[0].id;
+    const vectorStr = `[${queryEmbedding.join(",")}]`;
+
+    // 2. Perform cosine similarity vector search
+    const query = `
+        SELECT
+            id,
+            repository_id as "repositoryId",
+            file_path as "filePath",
+            language,
+            symbol,
+            symbol_type as "symbolType",
+            start_line as "startLine",
+            end_line as "endLine",
+            content,
+            (1 - (embedding <=> $1::vector)) AS similarity
+        FROM code_chunks
+        WHERE repository_id = $2
+          AND embedding IS NOT NULL
+        ORDER BY embedding <=> $1::vector ASC
+        LIMIT $3;
+    `;
+
+    const result = await pool.query(query, [vectorStr, resolvedRepoId, limit]);
+    return result.rows.map((row) => ({
+        id: row.id,
+        repositoryId: row.repositoryId,
+        filePath: row.filePath,
+        language: row.language,
+        symbol: row.symbol,
+        symbolType: row.symbolType,
+        startLine: row.startLine,
+        endLine: row.endLine,
+        content: row.content,
+        similarity: parseFloat(row.similarity)
+    }));
+}
+
+export async function hasEmbeddedChunksForRepository(
+    repositoryId: string
+): Promise<{ exists: boolean; hasEmbeddings: boolean; repoId?: string }> {
+    const pool = getPool();
+
+    const repoRes = await pool.query(
+        `SELECT id FROM repositories 
+         WHERE id::text = $1 OR full_name = $1 OR github_id::text = $1
+         LIMIT 1`,
+        [repositoryId]
+    );
+
+    if (repoRes.rows.length === 0) {
+        return { exists: false, hasEmbeddings: false };
+    }
+
+    const resolvedRepoId = repoRes.rows[0].id;
+
+    const countRes = await pool.query(
+        `SELECT COUNT(*) as count 
+         FROM code_chunks 
+         WHERE repository_id = $1 AND embedding IS NOT NULL`,
+        [resolvedRepoId]
+    );
+
+    const count = parseInt(countRes.rows[0].count || "0", 10);
+    return { exists: true, hasEmbeddings: count > 0, repoId: resolvedRepoId };
 }

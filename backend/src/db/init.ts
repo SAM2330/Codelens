@@ -159,6 +159,7 @@ export async function initializeDatabase(): Promise<void> {
                 CREATE INDEX IF NOT EXISTS idx_code_chunks_analysis_id ON code_chunks(analysis_id);
                 CREATE INDEX IF NOT EXISTS idx_code_chunks_file_path ON code_chunks(analysis_id, file_path);
                 CREATE INDEX IF NOT EXISTS idx_code_chunks_repo_id ON code_chunks(repository_id);
+                CREATE INDEX IF NOT EXISTS idx_code_chunks_embedding_cosine ON code_chunks USING hnsw (embedding vector_cosine_ops);
             `;
         }
 
@@ -172,6 +173,7 @@ export async function initializeDatabase(): Promise<void> {
             ALTER TABLE code_chunks ADD COLUMN IF NOT EXISTS embedding vector(1536);
             ALTER TABLE code_chunks ADD COLUMN IF NOT EXISTS embedding_model TEXT;
             ALTER TABLE code_chunks ADD COLUMN IF NOT EXISTS embedded_at TIMESTAMPTZ;
+            CREATE INDEX IF NOT EXISTS idx_code_chunks_embedding_cosine ON code_chunks USING hnsw (embedding vector_cosine_ops);
         `);
 
         console.log("Database schema initialized successfully.");
