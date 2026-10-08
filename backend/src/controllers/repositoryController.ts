@@ -31,11 +31,17 @@ import {
     getStoredAnalysisByRepositoryId,
     getChunksByRepositoryId,
     getChunksWithoutEmbeddings,
-    saveChunkEmbeddings
+    saveChunkEmbeddings,
+    getStoredCodeFlowsByRepositoryId,
+    getStoredCodeFlowById
 } from "../db/repositories/repositoryDb";
 import { searchSimilarChunks } from "../services/vectorSearchService";
 import { retrieveContext } from "../services/ragService";
 import { generateRepositoryAnswer } from "../services/llmService";
+import {
+    transformFlowToGraph,
+    transformFlowsToGraphs
+} from "../services/codeFlowGraphService";
 import { FullAnalysisResult } from "../types/database";
 
 export async function analyzeRepository(req: Request, res: Response) {
@@ -580,20 +586,23 @@ export async function askRepository(req: Request, res: Response) {
             return res.json({
                 repositoryId: ragResult.repositoryId,
                 query: ragResult.query,
-                answer: "I couldn't find enough relevant code in the analyzed repository to answer this reliably."
+                answer: "I couldn't find enough relevant code in the analyzed repository to answer this reliably.",
+                citations: []
             });
         }
 
-        // 3. Generate grounded answer via Gemini LLM service
+        // 3. Generate grounded answer via Gemini LLM service with validated citations
         const llmResult = await generateRepositoryAnswer(
             query,
-            ragResult.context
+            ragResult.context,
+            ragResult.sources
         );
 
         return res.json({
             repositoryId: ragResult.repositoryId,
             query: ragResult.query,
-            answer: llmResult.answer
+            answer: llmResult.answer,
+            citations: llmResult.citations
         });
     } catch (error) {
         console.error("AI repository ask failed:", error);
@@ -606,6 +615,80 @@ export async function askRepository(req: Request, res: Response) {
             message: isQuota
                 ? "Gemini API quota exceeded (429 RESOURCE_EXHAUSTED). Please try again later."
                 : "Failed to generate AI answer for repository",
+            error: error instanceof Error ? error.message : "Unknown error"
+        });
+    }
+}
+
+export async function getRepositoryFlows(req: Request, res: Response) {
+    try {
+        const rawId = req.params.id;
+        const id = Array.isArray(rawId) ? rawId[0] : rawId;
+
+        if (!id) {
+            return res.status(400).json({
+                message: "Repository ID is required"
+            });
+        }
+
+        const data = await getStoredCodeFlowsByRepositoryId(id);
+
+        if (!data) {
+            return res.status(404).json({
+                message: `Repository with ID or name '${id}' not found`
+            });
+        }
+
+        const graphs = transformFlowsToGraphs(data.flows);
+
+        return res.json({
+            repositoryId: data.repositoryId,
+            flows: graphs
+        });
+    } catch (error) {
+        console.error("Failed to retrieve code flows:", error);
+        return res.status(500).json({
+            message: "Failed to retrieve code flows",
+            error: error instanceof Error ? error.message : "Unknown error"
+        });
+    }
+}
+
+export async function getRepositoryFlowById(req: Request, res: Response) {
+    try {
+        const rawId = req.params.id;
+        const id = Array.isArray(rawId) ? rawId[0] : rawId;
+
+        const rawFlowId = req.params.flowId;
+        const flowId = Array.isArray(rawFlowId) ? rawFlowId[0] : rawFlowId;
+
+        if (!id || !flowId) {
+            return res.status(400).json({
+                message: "Repository ID and Flow ID are required"
+            });
+        }
+
+        const data = await getStoredCodeFlowById(id, flowId);
+
+        if (!data) {
+            return res.status(404).json({
+                message: `Repository with ID or name '${id}' not found`
+            });
+        }
+
+        if (!data.flow) {
+            return res.status(404).json({
+                message: `Code flow with ID '${flowId}' not found for repository '${id}'`
+            });
+        }
+
+        const graph = transformFlowToGraph(data.flow);
+
+        return res.json(graph);
+    } catch (error) {
+        console.error("Failed to retrieve code flow:", error);
+        return res.status(500).json({
+            message: "Failed to retrieve code flow",
             error: error instanceof Error ? error.message : "Unknown error"
         });
     }

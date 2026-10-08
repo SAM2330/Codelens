@@ -149,8 +149,81 @@ export interface RagContextResult {
     message?: string;
 }
 
+export interface Citation {
+    id: number;
+    chunkId: string;
+    filePath: string;
+    symbol: string | null;
+    symbolType: string | null;
+    startLine: number;
+    endLine: number;
+}
+
 export interface LlmAnswer {
     answer: string;
+    citations: Citation[];
     model?: string;
 }
+
+export type CodeFlowNodeType =
+    | "route"
+    | "controller"
+    | "service"
+    | "external_api"
+    | "function"
+    | "database";
+
+export type CodeFlowEdgeType =
+    | "calls"
+    | "routes_to"
+    | "requests"
+    | "queries";
+
+export interface CodeFlowNode {
+    id: string;
+    type: CodeFlowNodeType;
+    name: string;
+    filePath?: string;
+    startLine?: number;
+    endLine?: number;
+}
+
+export interface CodeFlowEdge {
+    id: string;
+    source: string;
+    target: string;
+    type: CodeFlowEdgeType;
+}
+
+export interface CodeFlowGraph {
+    flowId: string;
+    entryPoint: string;
+    route?: string;
+    nodes: CodeFlowNode[];
+    edges: CodeFlowEdge[];
+}
+
+export interface StoredCodeFlow {
+    id: string;
+    repositoryId: string;
+    analysisId: string;
+    entryPoint: string;
+    route: string;
+    handler?: string | null;
+    steps: {
+        type: "route" | "controller" | "service" | "external_api" | "function" | "database";
+        name?: string;
+        file?: string;
+        line?: number;
+        url?: string;
+    }[];
+    createdAt?: Date | string;
+}
+
+export interface CodeFlowsResponse {
+    repositoryId: string;
+    flows: CodeFlowGraph[];
+}
+
+
 

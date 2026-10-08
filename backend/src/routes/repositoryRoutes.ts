@@ -7,7 +7,9 @@ import {
     embedRepositoryChunks,
     searchRepositoryChunks,
     getRepositoryContext,
-    askRepository
+    askRepository,
+    getRepositoryFlows,
+    getRepositoryFlowById
 } from "../controllers/repositoryController";
 
 const router = Router();
@@ -17,6 +19,8 @@ router.get("/:id/ask", askRepository);
 router.get("/:id/context", getRepositoryContext);
 router.get("/:id/search", searchRepositoryChunks);
 router.get("/:id/chunks", getRepositoryChunks);
+router.get("/:id/flows/:flowId", getRepositoryFlowById);
+router.get("/:id/flows", getRepositoryFlows);
 router.get("/:id", getRepositoryById);
 router.post("/:id/embed", embedRepositoryChunks);
 router.post("/analyze", analyzeRepository);

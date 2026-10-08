@@ -4,7 +4,8 @@ import {
     StoredRepository,
     AnalyzedFileDTO,
     CodeChunk,
-    VectorSearchResult
+    VectorSearchResult,
+    StoredCodeFlow
 } from "../../types/database";
 import {
     computeContentHash,
@@ -747,3 +748,118 @@ export async function hasEmbeddedChunksForRepository(
     const count = parseInt(countRes.rows[0].count || "0", 10);
     return { exists: true, hasEmbeddings: count > 0, repoId: resolvedRepoId };
 }
+
+export async function getStoredCodeFlowsByRepositoryId(
+    repositoryId: string
+): Promise<{ repositoryId: string; flows: StoredCodeFlow[] } | null> {
+    const pool = getPool();
+
+    const repoRes = await pool.query(
+        `SELECT id FROM repositories 
+         WHERE id::text = $1 OR full_name = $1 OR github_id::text = $1
+         LIMIT 1`,
+        [repositoryId]
+    );
+
+    if (repoRes.rows.length === 0) {
+        return null;
+    }
+
+    const resolvedRepoId = repoRes.rows[0].id;
+
+    // Get latest analysis ID
+    const analysisRes = await pool.query(
+        `SELECT id FROM analysis_results 
+         WHERE repository_id = $1 
+         ORDER BY analyzed_at DESC 
+         LIMIT 1`,
+        [resolvedRepoId]
+    );
+
+    if (analysisRes.rows.length === 0) {
+        return { repositoryId: resolvedRepoId, flows: [] };
+    }
+
+    const analysisId = analysisRes.rows[0].id;
+
+    const flowsRes = await pool.query(
+        `SELECT id, repository_id as "repositoryId", analysis_id as "analysisId", 
+                entry_point as "entryPoint", route, handler, steps, created_at as "createdAt"
+         FROM code_flows 
+         WHERE analysis_id = $1 
+         ORDER BY route ASC`,
+        [analysisId]
+    );
+
+    const flows: StoredCodeFlow[] = flowsRes.rows.map((row) => ({
+        id: row.id,
+        repositoryId: row.repositoryId,
+        analysisId: row.analysisId,
+        entryPoint: row.entryPoint,
+        route: row.route,
+        handler: row.handler,
+        steps: Array.isArray(row.steps) ? row.steps : [],
+        createdAt: row.createdAt
+    }));
+
+    return { repositoryId: resolvedRepoId, flows };
+}
+
+export async function getStoredCodeFlowById(
+    repositoryId: string,
+    flowId: string
+): Promise<{ repositoryId: string; flow: StoredCodeFlow | null } | null> {
+    const pool = getPool();
+
+    const repoRes = await pool.query(
+        `SELECT id FROM repositories 
+         WHERE id::text = $1 OR full_name = $1 OR github_id::text = $1
+         LIMIT 1`,
+        [repositoryId]
+    );
+
+    if (repoRes.rows.length === 0) {
+        return null;
+    }
+
+    const resolvedRepoId = repoRes.rows[0].id;
+
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(flowId);
+
+    const flowRes = isUuid
+        ? await pool.query(
+              `SELECT id, repository_id as "repositoryId", analysis_id as "analysisId", 
+                      entry_point as "entryPoint", route, handler, steps, created_at as "createdAt"
+               FROM code_flows 
+               WHERE repository_id = $1 AND id = $2
+               LIMIT 1`,
+              [resolvedRepoId, flowId]
+          )
+        : await pool.query(
+              `SELECT id, repository_id as "repositoryId", analysis_id as "analysisId", 
+                      entry_point as "entryPoint", route, handler, steps, created_at as "createdAt"
+               FROM code_flows 
+               WHERE repository_id = $1 AND route = $2
+               LIMIT 1`,
+              [resolvedRepoId, flowId]
+          );
+
+    if (flowRes.rows.length === 0) {
+        return { repositoryId: resolvedRepoId, flow: null };
+    }
+
+    const row = flowRes.rows[0];
+    const flow: StoredCodeFlow = {
+        id: row.id,
+        repositoryId: row.repositoryId,
+        analysisId: row.analysisId,
+        entryPoint: row.entryPoint,
+        route: row.route,
+        handler: row.handler,
+        steps: Array.isArray(row.steps) ? row.steps : [],
+        createdAt: row.createdAt
+    };
+
+    return { repositoryId: resolvedRepoId, flow };
+}
+
