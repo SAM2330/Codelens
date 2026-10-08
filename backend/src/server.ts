@@ -1,11 +1,12 @@
 import dotenv from "dotenv";
-// import "./services/astAnalyzer";
 
 dotenv.config();
 
 import express from "express";
 import cors from "cors";
 import repositoryRoutes from "./routes/repositoryRoutes";
+import { initializeDatabase } from "./db/init";
+import { isDatabaseConfigured } from "./db/client";
 
 const app = express();
 
@@ -21,6 +22,17 @@ app.get("/", (req, res) => {
     });
 });
 
-app.listen(PORT, () => {
-    console.log(`Server running on port ${PORT}`);
-});
+async function startServer() {
+    if (isDatabaseConfigured()) {
+        console.log("Database connection configured. Initializing schema...");
+        await initializeDatabase();
+    } else {
+        console.log("Note: Database not configured. Set DATABASE_URL in .env to enable persistence.");
+    }
+
+    app.listen(PORT, () => {
+        console.log(`Server running on port ${PORT}`);
+    });
+}
+
+startServer();
