@@ -3,6 +3,8 @@ import {
     FullAnalysisResult,
     StoredRepository,
     AnalyzedFileDTO,
+    AnalyzedFileSummaryDTO,
+    AnalyzedFileContentDTO,
     CodeChunk,
     VectorSearchResult,
     StoredCodeFlow
@@ -122,6 +124,13 @@ export async function saveAnalysis(
         // 2. Insert analyzed files
         if (analysis.files && analysis.files.length > 0) {
             for (const file of analysis.files) {
+                const fileSize =
+                    typeof file.size === "number"
+                        ? file.size
+                        : file.content
+                        ? Buffer.byteLength(file.content, "utf-8")
+                        : 0;
+
                 await client.query(
                     `INSERT INTO analyzed_files (
                         repository_id,
@@ -131,8 +140,10 @@ export async function saveAnalysis(
                         type,
                         area,
                         imports,
-                        structure
-                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+                        structure,
+                        content,
+                        size
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
                     [
                         repositoryId,
                         analysisId,
@@ -141,7 +152,9 @@ export async function saveAnalysis(
                         file.type,
                         file.area,
                         JSON.stringify(file.imports || []),
-                        JSON.stringify(file.structure || {})
+                        JSON.stringify(file.structure || {}),
+                        file.content || null,
+                        fileSize
                     ]
                 );
             }
@@ -861,5 +874,134 @@ export async function getStoredCodeFlowById(
     };
 
     return { repositoryId: resolvedRepoId, flow };
+}
+
+export async function getStoredAnalyzedFilesByRepositoryId(
+    repositoryId: string
+): Promise<AnalyzedFileSummaryDTO[] | null> {
+    const pool = getPool();
+
+    const repoRes = await pool.query(
+        `SELECT id FROM repositories 
+         WHERE id::text = $1 OR full_name = $1 OR github_id::text = $1
+         LIMIT 1`,
+        [repositoryId]
+    );
+
+    if (repoRes.rows.length === 0) {
+        return null;
+    }
+
+    const resolvedRepoId = repoRes.rows[0].id;
+
+    const analysisRes = await pool.query(
+        `SELECT id FROM analysis_results 
+         WHERE repository_id = $1 
+         ORDER BY analyzed_at DESC 
+         LIMIT 1`,
+        [resolvedRepoId]
+    );
+
+    if (analysisRes.rows.length === 0) {
+        return [];
+    }
+
+    const analysisId = analysisRes.rows[0].id;
+
+    const filesRes = await pool.query(
+        `SELECT path, language, COALESCE(size, LENGTH(content), 0) as size 
+         FROM analyzed_files 
+         WHERE analysis_id = $1 
+         ORDER BY path ASC`,
+        [analysisId]
+    );
+
+    return filesRes.rows.map((row) => ({
+        path: row.path,
+        language: row.language,
+        size: Number(row.size || 0)
+    }));
+}
+
+export async function getStoredAnalyzedFileByPath(
+    repositoryId: string,
+    filePath: string
+): Promise<{ notFoundRepo?: boolean; notFoundFile?: boolean; file?: AnalyzedFileContentDTO }> {
+    const pool = getPool();
+
+    const repoRes = await pool.query(
+        `SELECT id FROM repositories 
+         WHERE id::text = $1 OR full_name = $1 OR github_id::text = $1
+         LIMIT 1`,
+        [repositoryId]
+    );
+
+    if (repoRes.rows.length === 0) {
+        return { notFoundRepo: true };
+    }
+
+    const resolvedRepoId = repoRes.rows[0].id;
+
+    const analysisRes = await pool.query(
+        `SELECT id FROM analysis_results 
+         WHERE repository_id = $1 
+         ORDER BY analyzed_at DESC 
+         LIMIT 1`,
+        [resolvedRepoId]
+    );
+
+    if (analysisRes.rows.length === 0) {
+        return { notFoundFile: true };
+    }
+
+    const analysisId = analysisRes.rows[0].id;
+    const normalizedTarget = filePath.replace(/\\/g, "/");
+
+    const fileRes = await pool.query(
+        `SELECT path, language, content, COALESCE(size, LENGTH(content), 0) as size 
+         FROM analyzed_files 
+         WHERE analysis_id = $1 AND (path = $2 OR path = $3 OR LOWER(path) = LOWER($2) OR LOWER(path) = LOWER($3))
+         LIMIT 1`,
+        [analysisId, filePath, normalizedTarget]
+    );
+
+    if (fileRes.rows.length > 0) {
+        const row = fileRes.rows[0];
+        let content = row.content;
+
+        // If content was not stored in legacy row, attempt recovery from code chunks
+        if (content === null || content === undefined) {
+            const chunksRes = await pool.query(
+                `SELECT content, start_line, end_line, symbol_type 
+                 FROM code_chunks 
+                 WHERE analysis_id = $1 AND (file_path = $2 OR file_path = $3)
+                 ORDER BY start_line ASC`,
+                [analysisId, row.path, normalizedTarget]
+            );
+            if (chunksRes.rows.length > 0) {
+                const fileChunk = chunksRes.rows.find(
+                    (c) => c.symbol_type === "file" && c.start_line === 1
+                );
+                if (fileChunk) {
+                    content = fileChunk.content;
+                } else {
+                    content = chunksRes.rows.map((c) => c.content).join("\n\n");
+                }
+            } else {
+                content = "";
+            }
+        }
+
+        return {
+            file: {
+                path: row.path,
+                language: row.language,
+                content: content || "",
+                size: Number(row.size || Buffer.byteLength(content || "", "utf-8"))
+            }
+        };
+    }
+
+    return { notFoundFile: true };
 }
 

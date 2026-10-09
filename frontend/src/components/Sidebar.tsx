@@ -4,6 +4,7 @@ import {
     LayoutDashboard,
     FolderGit2,
     Layers,
+    FileCode,
     GitFork,
     Network,
     Database,
@@ -89,6 +90,16 @@ export const Sidebar: React.FC<SidebarProps> = ({
                         >
                             <Layers size={18} />
                             <span>Architecture</span>
+                        </NavLink>
+
+                        <NavLink
+                            to={`/repositories/${activeRepoId}/code`}
+                            className={({ isActive }) =>
+                                `sidebar-link ${isActive ? "active" : ""}`
+                            }
+                        >
+                            <FileCode size={18} />
+                            <span>Code</span>
                         </NavLink>
 
                         <NavLink

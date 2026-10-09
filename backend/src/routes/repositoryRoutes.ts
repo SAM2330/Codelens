@@ -3,6 +3,7 @@ import {
     analyzeRepository,
     getRepositories,
     getRepositoryById,
+    getRepositoryFiles,
     getRepositoryChunks,
     embedRepositoryChunks,
     searchRepositoryChunks,
@@ -19,6 +20,7 @@ router.get("/:id/ask", askRepository);
 router.get("/:id/context", getRepositoryContext);
 router.get("/:id/search", searchRepositoryChunks);
 router.get("/:id/chunks", getRepositoryChunks);
+router.get("/:id/files", getRepositoryFiles);
 router.get("/:id/flows/:flowId", getRepositoryFlowById);
 router.get("/:id/flows", getRepositoryFlows);
 router.get("/:id", getRepositoryById);

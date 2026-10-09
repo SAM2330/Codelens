@@ -4,6 +4,7 @@ import { Layout } from "./components/Layout";
 import { RepositoriesPage } from "./pages/RepositoriesPage";
 import { OverviewPage } from "./pages/OverviewPage";
 import { ArchitecturePage } from "./pages/ArchitecturePage";
+import { CodePage } from "./pages/CodePage";
 import { CodeFlowsPage } from "./pages/CodeFlowsPage";
 import { APIsPage } from "./pages/APIsPage";
 import { DatabasePage } from "./pages/DatabasePage";
@@ -18,6 +19,7 @@ export const App: React.FC = () => {
                     <Route path="/repositories" element={<RepositoriesPage />} />
                     <Route path="/repositories/:id" element={<OverviewPage />} />
                     <Route path="/repositories/:id/architecture" element={<ArchitecturePage />} />
+                    <Route path="/repositories/:id/code" element={<CodePage />} />
                     <Route path="/repositories/:id/flows" element={<CodeFlowsPage />} />
                     <Route path="/repositories/:id/apis" element={<APIsPage />} />
                     <Route path="/repositories/:id/database" element={<DatabasePage />} />

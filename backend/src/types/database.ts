@@ -15,8 +15,23 @@ export interface AnalyzedFileDTO {
     language: string;
     type: string;
     area: string;
+    size?: number;
+    content?: string;
     imports: ImportInfo[];
     structure: ASTAnalysis;
+}
+
+export interface AnalyzedFileSummaryDTO {
+    path: string;
+    language: string;
+    size: number;
+}
+
+export interface AnalyzedFileContentDTO {
+    path: string;
+    language: string;
+    content: string;
+    size: number;
 }
 
 export interface FullAnalysisResult {

@@ -2,7 +2,9 @@ import {
     StoredRepository,
     StoredAnalysisResult,
     CodeFlowsResponse,
-    CodeFlowGraph
+    CodeFlowGraph,
+    AnalyzedFileSummary,
+    AnalyzedFileContent
 } from "../types";
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || "/api";
@@ -34,6 +36,25 @@ export async function fetchRepositoryById(
 ): Promise<StoredAnalysisResult> {
     const res = await fetch(`${API_BASE_URL}/repositories/${encodeURIComponent(id)}`);
     return handleResponse<StoredAnalysisResult>(res);
+}
+
+export async function fetchRepositoryFiles(
+    id: string
+): Promise<AnalyzedFileSummary[]> {
+    const res = await fetch(
+        `${API_BASE_URL}/repositories/${encodeURIComponent(id)}/files`
+    );
+    return handleResponse<AnalyzedFileSummary[]>(res);
+}
+
+export async function fetchRepositoryFileContent(
+    id: string,
+    filePath: string
+): Promise<AnalyzedFileContent> {
+    const res = await fetch(
+        `${API_BASE_URL}/repositories/${encodeURIComponent(id)}/files?path=${encodeURIComponent(filePath)}`
+    );
+    return handleResponse<AnalyzedFileContent>(res);
 }
 
 export async function fetchRepositoryFlows(

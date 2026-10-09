@@ -1,13 +1,26 @@
 import React, { useState } from "react";
+import { Link, useParams } from "react-router-dom";
 import { CodeFlowGraph } from "../types";
-import { ArrowRight, ChevronDown, ChevronRight, Globe, Layers, Server, Terminal } from "lucide-react";
+import {
+    ArrowRight,
+    ChevronDown,
+    ChevronRight,
+    Globe,
+    Layers,
+    Server,
+    Terminal,
+    ArrowUpRight
+} from "lucide-react";
 
 interface FlowCardProps {
     flow: CodeFlowGraph;
+    repositoryId?: string;
     onClick?: () => void;
 }
 
-export const FlowCard: React.FC<FlowCardProps> = ({ flow }) => {
+export const FlowCard: React.FC<FlowCardProps> = ({ flow, repositoryId }) => {
+    const { id: paramRepoId } = useParams<{ id: string }>();
+    const activeRepoId = repositoryId || paramRepoId;
     const [expanded, setExpanded] = useState(false);
 
     const getMethodBadgeClass = (route: string) => {
@@ -101,38 +114,86 @@ export const FlowCard: React.FC<FlowCardProps> = ({ flow }) => {
                     <div style={{ fontSize: "0.75rem", fontWeight: 600, color: "var(--text-dim)", textTransform: "uppercase" }}>
                         Detailed Execution Path
                     </div>
-                    {flow.nodes.map((node, idx) => (
-                        <div
-                            key={node.id}
-                            style={{
-                                display: "flex",
-                                alignItems: "center",
-                                justifyContent: "space-between",
-                                backgroundColor: "var(--bg-card)",
-                                padding: "0.5rem 0.75rem",
-                                borderRadius: "var(--radius-sm)",
-                                fontSize: "0.8rem",
-                                border: "1px solid var(--border-subtle)"
-                            }}
-                        >
-                            <div style={{ display: "flex", alignItems: "center", gap: "0.6rem" }}>
-                                <span style={{ color: "var(--text-dim)", fontWeight: 600, width: "16px" }}>
-                                    {idx + 1}.
-                                </span>
-                                <span className={`badge badge-${node.type === "external_api" ? "cyan" : node.type === "route" ? "emerald" : node.type === "controller" ? "blue" : "purple"}`}>
-                                    {node.type}
-                                </span>
-                                <span style={{ fontWeight: 600, color: "var(--text-main)", fontFamily: "var(--font-mono)" }}>
-                                    {node.name}
-                                </span>
-                            </div>
-                            {node.filePath && (
-                                <div style={{ color: "var(--text-muted)", fontFamily: "var(--font-mono)", fontSize: "0.75rem" }}>
-                                    {node.filePath}{typeof node.startLine === "number" ? `:${node.startLine}` : ""}
+                    {flow.nodes.map((node, idx) => {
+                        const codeViewerUrl =
+                            activeRepoId && node.filePath
+                                ? `/repositories/${encodeURIComponent(
+                                      activeRepoId
+                                  )}/code?path=${encodeURIComponent(node.filePath)}${
+                                      typeof node.startLine === "number" ? `&line=${node.startLine}` : ""
+                                  }`
+                                : null;
+
+                        return (
+                            <div
+                                key={node.id}
+                                style={{
+                                    display: "flex",
+                                    alignItems: "center",
+                                    justifyContent: "space-between",
+                                    backgroundColor: "var(--bg-card)",
+                                    padding: "0.5rem 0.75rem",
+                                    borderRadius: "var(--radius-sm)",
+                                    fontSize: "0.8rem",
+                                    border: "1px solid var(--border-subtle)"
+                                }}
+                            >
+                                <div style={{ display: "flex", alignItems: "center", gap: "0.6rem" }}>
+                                    <span style={{ color: "var(--text-dim)", fontWeight: 600, width: "16px" }}>
+                                        {idx + 1}.
+                                    </span>
+                                    <span
+                                        className={`badge badge-${
+                                            node.type === "external_api"
+                                                ? "cyan"
+                                                : node.type === "route"
+                                                ? "emerald"
+                                                : node.type === "controller"
+                                                ? "blue"
+                                                : "purple"
+                                        }`}
+                                    >
+                                        {node.type}
+                                    </span>
+                                    <span
+                                        style={{
+                                            fontWeight: 600,
+                                            color: "var(--text-main)",
+                                            fontFamily: "var(--font-mono)"
+                                        }}
+                                    >
+                                        {node.name}
+                                    </span>
                                 </div>
-                            )}
-                        </div>
-                    ))}
+
+                                {node.filePath && (
+                                    <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                                        <span
+                                            style={{
+                                                color: "var(--text-muted)",
+                                                fontFamily: "var(--font-mono)",
+                                                fontSize: "0.75rem"
+                                            }}
+                                        >
+                                            {node.filePath}
+                                            {typeof node.startLine === "number" ? `:${node.startLine}` : ""}
+                                        </span>
+                                        {codeViewerUrl && (
+                                            <Link
+                                                to={codeViewerUrl}
+                                                className="source-nav-link"
+                                                title={`Open ${node.filePath} in Code Viewer`}
+                                                style={{ padding: "0.2rem 0.4rem", fontSize: "0.7rem" }}
+                                            >
+                                                <span>Source</span>
+                                                <ArrowUpRight size={11} />
+                                            </Link>
+                                        )}
+                                    </div>
+                                )}
+                            </div>
+                        );
+                    })}
                 </div>
             )}
         </div>

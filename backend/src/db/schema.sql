@@ -47,6 +47,8 @@ CREATE TABLE IF NOT EXISTS analyzed_files (
     area TEXT NOT NULL,
     imports JSONB NOT NULL DEFAULT '[]'::jsonb,
     structure JSONB NOT NULL DEFAULT '{}'::jsonb,
+    content TEXT,
+    size INTEGER,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 

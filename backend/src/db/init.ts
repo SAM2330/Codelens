@@ -57,6 +57,8 @@ export async function initializeDatabase(): Promise<void> {
                     area TEXT NOT NULL,
                     imports JSONB NOT NULL DEFAULT '[]'::jsonb,
                     structure JSONB NOT NULL DEFAULT '{}'::jsonb,
+                    content TEXT,
+                    size INTEGER,
                     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                 );
 
@@ -173,6 +175,9 @@ export async function initializeDatabase(): Promise<void> {
             ALTER TABLE code_chunks ADD COLUMN IF NOT EXISTS embedding vector(1536);
             ALTER TABLE code_chunks ADD COLUMN IF NOT EXISTS embedding_model TEXT;
             ALTER TABLE code_chunks ADD COLUMN IF NOT EXISTS embedded_at TIMESTAMPTZ;
+            ALTER TABLE analyzed_files ADD COLUMN IF NOT EXISTS content TEXT;
+            ALTER TABLE analyzed_files ADD COLUMN IF NOT EXISTS size INTEGER;
+            CREATE UNIQUE INDEX IF NOT EXISTS uq_code_chunks_analysis_file_symbol_lines ON code_chunks (analysis_id, file_path, symbol, symbol_type, start_line, end_line);
             CREATE INDEX IF NOT EXISTS idx_code_chunks_embedding_cosine ON code_chunks USING hnsw (embedding vector_cosine_ops);
         `);
 

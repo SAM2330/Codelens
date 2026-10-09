@@ -33,7 +33,9 @@ import {
     getChunksWithoutEmbeddings,
     saveChunkEmbeddings,
     getStoredCodeFlowsByRepositoryId,
-    getStoredCodeFlowById
+    getStoredCodeFlowById,
+    getStoredAnalyzedFilesByRepositoryId,
+    getStoredAnalyzedFileByPath
 } from "../db/repositories/repositoryDb";
 import { searchSimilarChunks } from "../services/vectorSearchService";
 import { retrieveContext } from "../services/ragService";
@@ -146,6 +148,8 @@ export async function analyzeRepository(req: Request, res: Response) {
             language: file.language,
             type: file.type,
             area: file.area,
+            size: file.size,
+            content: file.content,
             imports: file.imports,
             structure: file.structure
         }));
@@ -689,6 +693,63 @@ export async function getRepositoryFlowById(req: Request, res: Response) {
         console.error("Failed to retrieve code flow:", error);
         return res.status(500).json({
             message: "Failed to retrieve code flow",
+            error: error instanceof Error ? error.message : "Unknown error"
+        });
+    }
+}
+
+export async function getRepositoryFiles(req: Request, res: Response) {
+    try {
+        const rawId = req.params.id;
+        const id = Array.isArray(rawId) ? rawId[0] : rawId;
+
+        if (!id) {
+            return res.status(400).json({
+                message: "Repository ID is required"
+            });
+        }
+
+        const rawPath = req.query.path;
+
+        // Individual file endpoint: GET /api/repositories/:id/files?path=<encoded-file-path>
+        if (typeof rawPath === "string" && rawPath.trim().length > 0) {
+            const filePath = rawPath.trim();
+            const result = await getStoredAnalyzedFileByPath(id, filePath);
+
+            if (result.notFoundRepo) {
+                return res.status(404).json({
+                    message: `Repository with ID or name '${id}' not found`
+                });
+            }
+
+            if (result.notFoundFile || !result.file) {
+                return res.status(404).json({
+                    message: `File '${filePath}' not found in analyzed repository files`
+                });
+            }
+
+            return res.json({
+                path: result.file.path,
+                language: result.file.language,
+                content: result.file.content,
+                size: result.file.size
+            });
+        }
+
+        // Repository files list endpoint: GET /api/repositories/:id/files
+        const files = await getStoredAnalyzedFilesByRepositoryId(id);
+
+        if (files === null) {
+            return res.status(404).json({
+                message: `Repository with ID or name '${id}' not found`
+            });
+        }
+
+        return res.json(files);
+    } catch (error) {
+        console.error("Failed to retrieve repository files:", error);
+        return res.status(500).json({
+            message: "Failed to retrieve repository files",
             error: error instanceof Error ? error.message : "Unknown error"
         });
     }

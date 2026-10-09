@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { useParams } from "react-router-dom";
+import { Link, useParams } from "react-router-dom";
 import { fetchRepositoryById } from "../services/api";
 import { StoredAnalysisResult } from "../types";
 import { LoadingState } from "../components/LoadingState";
@@ -11,7 +11,8 @@ import {
     Terminal,
     GitCommit,
     FileCode,
-    Flame
+    Flame,
+    ArrowUpRight
 } from "lucide-react";
 
 export const ArchitecturePage: React.FC = () => {
@@ -101,24 +102,33 @@ export const ArchitecturePage: React.FC = () => {
                     ) : (
                         <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
                             {architecture.entryPoints.map((ep, idx) => (
-                                <div
+                                <Link
                                     key={idx}
+                                    to={`/repositories/${encodeURIComponent(id || "")}/code?path=${encodeURIComponent(
+                                        ep
+                                    )}`}
                                     style={{
                                         display: "flex",
                                         alignItems: "center",
-                                        gap: "0.5rem",
+                                        justifyContent: "space-between",
                                         backgroundColor: "var(--bg-card-subtle)",
                                         padding: "0.5rem 0.75rem",
                                         borderRadius: "var(--radius-sm)",
                                         fontFamily: "var(--font-mono)",
                                         fontSize: "0.8rem",
                                         color: "#34d399",
-                                        border: "1px solid var(--border-subtle)"
+                                        border: "1px solid var(--border-subtle)",
+                                        textDecoration: "none"
                                     }}
+                                    title={`Open ${ep} in Code Viewer`}
+                                    className="source-nav-link-box"
                                 >
-                                    <FileCode size={14} />
-                                    <span>{ep}</span>
-                                </div>
+                                    <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                                        <FileCode size={14} />
+                                        <span>{ep}</span>
+                                    </div>
+                                    <ArrowUpRight size={13} style={{ color: "var(--text-dim)" }} />
+                                </Link>
                             ))}
                         </div>
                     )}
@@ -140,8 +150,11 @@ export const ArchitecturePage: React.FC = () => {
                     ) : (
                         <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
                             {architecture.components.map((comp, idx) => (
-                                <div
+                                <Link
                                     key={idx}
+                                    to={`/repositories/${encodeURIComponent(id || "")}/code?path=${encodeURIComponent(
+                                        comp.path
+                                    )}`}
                                     style={{
                                         display: "flex",
                                         alignItems: "center",
@@ -150,17 +163,23 @@ export const ArchitecturePage: React.FC = () => {
                                         padding: "0.5rem 0.75rem",
                                         borderRadius: "var(--radius-sm)",
                                         fontSize: "0.8rem",
-                                        border: "1px solid var(--border-subtle)"
+                                        border: "1px solid var(--border-subtle)",
+                                        textDecoration: "none"
                                     }}
+                                    title={`Open ${comp.path} in Code Viewer`}
+                                    className="source-nav-link-box"
                                 >
                                     <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
                                         <span className="badge badge-cyan">{comp.type}</span>
                                         <span style={{ fontWeight: 600, color: "var(--text-main)" }}>{comp.name}</span>
                                     </div>
-                                    <span style={{ color: "var(--text-dim)", fontFamily: "var(--font-mono)", fontSize: "0.75rem" }}>
-                                        {comp.path}
-                                    </span>
-                                </div>
+                                    <div style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
+                                        <span style={{ color: "var(--text-dim)", fontFamily: "var(--font-mono)", fontSize: "0.75rem" }}>
+                                            {comp.path}
+                                        </span>
+                                        <ArrowUpRight size={13} style={{ color: "var(--text-dim)" }} />
+                                    </div>
+                                </Link>
                             ))}
                         </div>
                     )}
@@ -224,8 +243,11 @@ export const ArchitecturePage: React.FC = () => {
 
                     <div style={{ display: "flex", flexDirection: "column", gap: "0.4rem" }}>
                         {git.hotspots.slice(0, 5).map((hotspot, idx) => (
-                            <div
+                            <Link
                                 key={idx}
+                                to={`/repositories/${encodeURIComponent(id || "")}/code?path=${encodeURIComponent(
+                                    hotspot.file
+                                )}`}
                                 style={{
                                     display: "flex",
                                     alignItems: "center",
@@ -234,14 +256,23 @@ export const ArchitecturePage: React.FC = () => {
                                     padding: "0.5rem 0.75rem",
                                     borderRadius: "var(--radius-sm)",
                                     fontSize: "0.8rem",
-                                    border: "1px solid var(--border-subtle)"
+                                    border: "1px solid var(--border-subtle)",
+                                    textDecoration: "none"
                                 }}
+                                title={`Open ${hotspot.file} in Code Viewer`}
+                                className="source-nav-link-box"
                             >
-                                <span style={{ fontFamily: "var(--font-mono)", color: "var(--text-main)" }}>
-                                    {hotspot.file}
-                                </span>
-                                <span className="badge badge-amber">{hotspot.changes} modifications</span>
-                            </div>
+                                <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                                    <FileCode size={14} className="text-amber-400" />
+                                    <span style={{ fontFamily: "var(--font-mono)", color: "var(--text-main)" }}>
+                                        {hotspot.file}
+                                    </span>
+                                </div>
+                                <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                                    <span className="badge badge-amber">{hotspot.changes} modifications</span>
+                                    <ArrowUpRight size={13} style={{ color: "var(--text-dim)" }} />
+                                </div>
+                            </Link>
                         ))}
                     </div>
                 </div>

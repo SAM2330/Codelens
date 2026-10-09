@@ -158,6 +158,37 @@ export interface AnalyzedFileItem {
     area: string;
 }
 
+export interface AnalyzedFileSummary {
+    path: string;
+    language: string;
+    size: number;
+}
+
+export interface AnalyzedFileContent {
+    path: string;
+    language: string;
+    content: string;
+    size: number;
+}
+
+export interface FileTreeNode {
+    name: string;
+    path: string;
+    isDirectory: boolean;
+    children: FileTreeNode[];
+    file?: AnalyzedFileSummary;
+}
+
+export interface Citation {
+    id: number;
+    filePath: string;
+    startLine: number;
+    endLine: number;
+    chunkId?: string;
+    symbol?: string | null;
+    symbolType?: string | null;
+}
+
 export interface DependencyItem {
     from: string;
     to: string;

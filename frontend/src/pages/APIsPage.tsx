@@ -1,11 +1,11 @@
 import React, { useEffect, useState } from "react";
-import { useParams } from "react-router-dom";
+import { Link, useParams } from "react-router-dom";
 import { fetchRepositoryById } from "../services/api";
 import { StoredAnalysisResult, APIEndpoint } from "../types";
 import { LoadingState } from "../components/LoadingState";
 import { ErrorState } from "../components/ErrorState";
 import { EmptyState } from "../components/EmptyState";
-import { Network, Search, Globe, Filter } from "lucide-react";
+import { Network, Search, Globe, Filter, ArrowUpRight, FileCode } from "lucide-react";
 
 export const APIsPage: React.FC = () => {
     const { id } = useParams<{ id: string }>();
@@ -192,14 +192,42 @@ export const APIsPage: React.FC = () => {
                                         </span>
                                     </td>
                                     <td>
-                                        <span style={{ fontFamily: "var(--font-mono)", color: "var(--text-muted)", fontSize: "0.75rem" }}>
-                                            {ep.file}
-                                        </span>
+                                        {ep.file ? (
+                                            <Link
+                                                to={`/repositories/${encodeURIComponent(
+                                                    id || ""
+                                                )}/code?path=${encodeURIComponent(ep.file)}&line=${ep.line}`}
+                                                className="table-source-link"
+                                                title={`Open ${ep.file} at line ${ep.line} in Code Viewer`}
+                                            >
+                                                <FileCode size={13} className="text-blue-400" />
+                                                <span>{ep.file}</span>
+                                                <ArrowUpRight size={12} />
+                                            </Link>
+                                        ) : (
+                                            <span style={{ color: "var(--text-dim)" }}>-</span>
+                                        )}
                                     </td>
                                     <td>
-                                        <span style={{ fontFamily: "var(--font-mono)", color: "var(--text-dim)", fontSize: "0.75rem" }}>
-                                            :{ep.line}
-                                        </span>
+                                        {ep.file ? (
+                                            <Link
+                                                to={`/repositories/${encodeURIComponent(
+                                                    id || ""
+                                                )}/code?path=${encodeURIComponent(ep.file)}&line=${ep.line}`}
+                                                style={{
+                                                    fontFamily: "var(--font-mono)",
+                                                    color: "#38bdf8",
+                                                    fontSize: "0.75rem",
+                                                    textDecoration: "underline"
+                                                }}
+                                            >
+                                                :{ep.line}
+                                            </Link>
+                                        ) : (
+                                            <span style={{ fontFamily: "var(--font-mono)", color: "var(--text-dim)", fontSize: "0.75rem" }}>
+                                                :{ep.line}
+                                            </span>
+                                        )}
                                     </td>
                                 </tr>
                             ))}
