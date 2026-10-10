@@ -35,10 +35,15 @@ import {
     getStoredCodeFlowsByRepositoryId,
     getStoredCodeFlowById,
     getStoredAnalyzedFilesByRepositoryId,
-    getStoredAnalyzedFileByPath
+    getStoredAnalyzedFileByPath,
+    getStoredGitAnalysisByRepositoryId
 } from "../db/repositories/repositoryDb";
 import { searchSimilarChunks } from "../services/vectorSearchService";
 import { retrieveContext } from "../services/ragService";
+import {
+    detectGitHistoryIntent,
+    retrieveGitHistoryContext
+} from "../services/gitHistoryService";
 import {
     generateRepositoryAnswer,
     isRateLimitOrQuotaError,
@@ -548,13 +553,16 @@ export async function getRepositoryContext(req: Request, res: Response) {
 }
 
 export async function askRepository(req: Request, res: Response) {
+    let currentStage = "QueryValidation";
     try {
+        currentStage = "QueryValidation";
         const rawId = req.params.id;
         const id = Array.isArray(rawId) ? rawId[0] : rawId;
 
         if (!id) {
             return res.status(400).json({
-                message: "Repository ID is required"
+                message: "Repository ID is required",
+                stage: currentStage
             });
         }
 
@@ -563,38 +571,140 @@ export async function askRepository(req: Request, res: Response) {
 
         if (!query) {
             return res.status(400).json({
-                message: "Search query parameter 'q' is required"
+                message: "Search query parameter 'q' is required",
+                stage: currentStage
             });
         }
 
-        console.log(`[AskRepository] Starting RAG context retrieval for repo '${id}' with query: "${query}"`);
-        // 1. Retrieve RAG context using existing RAG engine
+        // 1. Detect if this query involves Git history
+        currentStage = "HistoryRouting";
+        const gitDetection = detectGitHistoryIntent(query);
+
+        if (gitDetection.isGitHistory) {
+            console.log(
+                `[AskRepository][Stage:HistoryRouting] Detected Git history intent '${gitDetection.intent}' for repo '${id}'`
+            );
+
+            currentStage = "GitHistoryRetrieval";
+            const gitData = await getStoredGitAnalysisByRepositoryId(id);
+
+            if (!gitData) {
+                console.warn(`[AskRepository][Stage:GitHistoryRetrieval] Repository '${id}' not found`);
+                return res.status(404).json({
+                    message: `Repository '${id}' not found.`,
+                    stage: currentStage
+                });
+            }
+
+            if (
+                !gitData.git ||
+                !gitData.git.commits ||
+                gitData.git.commits.length === 0
+            ) {
+                console.log(
+                    `[AskRepository][Stage:GitHistoryRetrieval] No Git history available for repo '${id}', returning graceful empty history response`
+                );
+                return res.json({
+                    repositoryId: gitData.repositoryId,
+                    query,
+                    answer: "The repository's available Git history is empty or has not been collected for this repository. Cannot determine commit changes or history.",
+                    citations: []
+                });
+            }
+
+            const analyzedFiles = await getStoredAnalyzedFilesByRepositoryId(id);
+            const gitResult = retrieveGitHistoryContext(
+                gitData.git,
+                gitDetection,
+                analyzedFiles || []
+            );
+
+            let ragContext = "";
+            let combinedSources = [...gitResult.sources];
+
+            // If query also needs current source code context (e.g. topic, function introduction, file content)
+            if (gitDetection.needsCodeContext) {
+                currentStage = "GitCodeContextRetrieval";
+                try {
+                    const ragResult = await retrieveContext(id, query);
+                    if (ragResult && !ragResult.notFound && !ragResult.quotaExceeded) {
+                        ragContext = ragResult.context || "";
+                        if (ragResult.sources && ragResult.sources.length > 0) {
+                            const seenPaths = new Set(
+                                combinedSources.map((s) => s.filePath)
+                            );
+                            for (const s of ragResult.sources) {
+                                if (!seenPaths.has(s.filePath)) {
+                                    combinedSources.push(s);
+                                    seenPaths.add(s.filePath);
+                                }
+                            }
+                        }
+                    }
+                } catch (codeErr) {
+                    console.warn(
+                        "[AskRepository][Stage:GitCodeContextRetrieval] Optional code retrieval for Git query had issue (proceeding with Git context):",
+                        codeErr
+                    );
+                }
+            }
+
+            currentStage = "LLMAnswerGeneration";
+            console.log(
+                `[AskRepository][Stage:LLMAnswerGeneration] Generating Git history answer with ${combinedSources.length} citation sources...`
+            );
+
+            const llmResult = await generateRepositoryAnswer(
+                query,
+                ragContext,
+                combinedSources,
+                { gitHistoryContext: gitResult.gitContext }
+            );
+
+            currentStage = "Complete";
+            console.log(
+                `[AskRepository][Stage:Complete] Git history answer generated successfully with ${llmResult.citations?.length || 0} citations`
+            );
+
+            return res.json({
+                repositoryId: gitData.repositoryId,
+                query,
+                answer: llmResult.answer,
+                citations: llmResult.citations
+            });
+        }
+
+        // 2. Standard Code RAG query flow
+        currentStage = "RAGContextRetrieval";
+        console.log(`[AskRepository][Stage:RAGContextRetrieval] Starting RAG context retrieval for repo '${id}' with query: "${query}"`);
         const ragResult = await retrieveContext(id, query);
 
         if (ragResult.notFound) {
-            console.warn(`[AskRepository] Repository '${id}' not found`);
+            console.warn(`[AskRepository][Stage:RAGContextRetrieval] Repository '${id}' not found`);
             return res.status(404).json({
-                message: ragResult.message || `Repository '${id}' not found.`
+                message: ragResult.message || `Repository '${id}' not found.`,
+                stage: currentStage
             });
         }
 
         if (ragResult.quotaExceeded) {
-            console.warn(`[AskRepository] Quota exceeded during context retrieval for repo '${id}'`);
+            console.warn(`[AskRepository][Stage:RAGContextRetrieval] Quota exceeded during context retrieval for repo '${id}'`);
             return res.status(429).json({
                 message:
                     ragResult.message ||
-                    "Gemini API rate limit or quota exceeded (429). Please try again in a moment."
+                    "Gemini API rate limit or quota exceeded (429 RESOURCE_EXHAUSTED). Please wait a moment and try again.",
+                stage: currentStage
             });
         }
 
-        // 2. If no context or sourceCount is 0, return clear no-context answer without calling LLM
+        // 3. If no context or sourceCount is 0, return clear no-context answer without calling LLM
         if (
             ragResult.hasNoEmbeddings ||
             ragResult.sourceCount === 0 ||
             !ragResult.context ||
             ragResult.context.trim().length === 0
         ) {
-            console.log(`[AskRepository] No relevant context found for repo '${id}', returning graceful empty context response`);
+            console.log(`[AskRepository][Stage:RAGContextRetrieval] No relevant context found for repo '${id}', returning graceful empty context response`);
             return res.json({
                 repositoryId: ragResult.repositoryId,
                 query: ragResult.query,
@@ -603,16 +713,18 @@ export async function askRepository(req: Request, res: Response) {
             });
         }
 
-        console.log(`[AskRepository] Retrieved ${ragResult.sourceCount} sources (${ragResult.context.length} chars). Generating grounded answer...`);
+        currentStage = "LLMAnswerGeneration";
+        console.log(`[AskRepository][Stage:LLMAnswerGeneration] Retrieved ${ragResult.sourceCount} sources (${ragResult.context.length} chars). Generating grounded answer...`);
 
-        // 3. Generate grounded answer via Gemini LLM service with validated citations
+        // 4. Generate grounded answer via Gemini LLM service with validated citations
         const llmResult = await generateRepositoryAnswer(
             query,
             ragResult.context,
             ragResult.sources
         );
 
-        console.log(`[AskRepository] Answer generated successfully with ${llmResult.citations?.length || 0} citations using model '${llmResult.model || "default"}'`);
+        currentStage = "Complete";
+        console.log(`[AskRepository][Stage:Complete] Code answer generated successfully with ${llmResult.citations?.length || 0} citations using model '${llmResult.model || "default"}'`);
 
         return res.json({
             repositoryId: ragResult.repositoryId,
@@ -631,13 +743,24 @@ export async function askRepository(req: Request, res: Response) {
             (error as any)?.status === 503 ||
             isUnavailableOrDemandError(error);
 
-        const statusCode = isQuota ? 429 : isUnavailable ? 503 : 500;
+        const isTimeout =
+            (error as any)?.isTimeout ||
+            (error as any)?.status === 504 ||
+            (error as any)?.name === "TimeoutError" ||
+            String(error).toLowerCase().includes("timed out") ||
+            String(error).toLowerCase().includes("timeout");
+
+        const statusCode = isQuota ? 429 : isUnavailable ? 503 : isTimeout ? 504 : 500;
 
         let userMessage = "Failed to generate AI answer for repository";
         if (isQuota) {
             userMessage = "Gemini API rate limit or quota exceeded. Please wait a moment and try again.";
         } else if (isUnavailable) {
             userMessage = "The AI service is currently experiencing temporary high demand. Please try again shortly.";
+        } else if (isTimeout) {
+            userMessage = "The request timed out while generating the AI answer. Please try again.";
+        } else if (currentStage === "RAGContextRetrieval" || currentStage === "GitHistoryRetrieval") {
+            userMessage = "Failed to retrieve relevant code or history context for this query.";
         }
 
         const rawMsg = error instanceof Error ? error.message : "Unknown error";
@@ -655,14 +778,15 @@ export async function askRepository(req: Request, res: Response) {
             }
         }
 
-        console.error(`[AskRepository] Failed at stage (status ${statusCode}):`, {
+        console.error(`[AskRepository][FailureStage:${currentStage}] Status: ${statusCode}:`, {
             userMessage,
             detail: cleanDetail
         });
 
         return res.status(statusCode).json({
             message: userMessage,
-            error: cleanDetail
+            error: cleanDetail,
+            stage: currentStage
         });
     }
 }

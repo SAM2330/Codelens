@@ -79,12 +79,35 @@ export async function fetchRepositoryFlowById(
 
 export async function askRepositoryQuestion(
     id: string,
-    query: string
+    query: string,
+    signal?: AbortSignal
 ): Promise<AskRepositoryResponse> {
-    const res = await fetch(
-        `${API_BASE_URL}/repositories/${encodeURIComponent(id)}/ask?q=${encodeURIComponent(query)}`
-    );
-    return handleResponse<AskRepositoryResponse>(res);
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => {
+        controller.abort();
+    }, 45000);
+
+    if (signal) {
+        signal.addEventListener("abort", () => {
+            clearTimeout(timeoutId);
+            controller.abort();
+        });
+    }
+
+    try {
+        const res = await fetch(
+            `${API_BASE_URL}/repositories/${encodeURIComponent(id)}/ask?q=${encodeURIComponent(query)}`,
+            { signal: controller.signal }
+        );
+        return await handleResponse<AskRepositoryResponse>(res);
+    } catch (err: any) {
+        if (err.name === "AbortError" || controller.signal.aborted) {
+            throw new Error("Request timed out after 45 seconds while waiting for AI response.");
+        }
+        throw err;
+    } finally {
+        clearTimeout(timeoutId);
+    }
 }
 
 export async function analyzeRepository(

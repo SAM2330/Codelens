@@ -5,6 +5,8 @@ export type GitCommit = {
     message: string;
     author: string | null;
     date: string | null;
+    parents?: string[];
+    body?: string;
 };
 
 export type GitContributor = {
@@ -23,6 +25,7 @@ export type GitFileChange = {
     additions: number;
     deletions: number;
     changes: number;
+    patch?: string;
 };
 
 export type GitAnalysis = {
@@ -34,6 +37,7 @@ export type GitAnalysis = {
 
 type GitHubCommit = {
     sha: string;
+    parents?: { sha: string }[];
     commit: {
         message: string;
         author: {
@@ -45,11 +49,13 @@ type GitHubCommit = {
 
 type GitHubCommitDetail = {
     sha: string;
+    parents?: { sha: string }[];
     files?: {
         filename: string;
         additions: number;
         deletions: number;
         changes: number;
+        patch?: string;
     }[];
 };
 
@@ -78,8 +84,12 @@ export async function analyzeGitHistory(
             sha: commit.sha,
             message: commit.commit.message
                 .split("\n")[0],
+            body: commit.commit.message.includes("\n")
+                ? commit.commit.message
+                : undefined,
             author: commit.commit.author?.name || null,
-            date: commit.commit.author?.date || null
+            date: commit.commit.author?.date || null,
+            parents: commit.parents?.map((p) => p.sha) || []
         })
     );
 
@@ -101,12 +111,20 @@ export async function analyzeGitHistory(
                 );
 
             for (const file of details.files || []) {
+                const rawPatch = file.patch;
+                const patch = rawPatch
+                    ? rawPatch.length > 1500
+                        ? rawPatch.slice(0, 1500) + "\n...[diff truncated]"
+                        : rawPatch
+                    : undefined;
+
                 recentChanges.push({
                     commit: commit.sha,
                     file: file.filename,
                     additions: file.additions,
                     deletions: file.deletions,
-                    changes: file.changes
+                    changes: file.changes,
+                    patch
                 });
             }
         } catch {

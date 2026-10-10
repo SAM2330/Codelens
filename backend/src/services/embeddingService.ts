@@ -317,12 +317,27 @@ export async function embedQueryText(query: string): Promise<number[]> {
     const ai = getGenAIClient();
 
     try {
-        const response = await ai.models.embedContent({
+        let timer: NodeJS.Timeout;
+        const embedPromise = ai.models.embedContent({
             model: EMBEDDING_MODEL,
             contents: query.trim(),
             config: {
                 outputDimensionality: EMBEDDING_DIMENSIONS
             }
+        });
+
+        const timeoutPromise = new Promise<never>((_, reject) => {
+            timer = setTimeout(() => {
+                const timeoutErr = new Error("Gemini query embedding timed out after 15s");
+                timeoutErr.name = "TimeoutError";
+                (timeoutErr as any).isTimeout = true;
+                (timeoutErr as any).status = 504;
+                reject(timeoutErr);
+            }, 15000);
+        });
+
+        const response = await Promise.race([embedPromise, timeoutPromise]).finally(() => {
+            clearTimeout(timer);
         });
 
         const values =

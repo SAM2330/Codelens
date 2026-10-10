@@ -7,7 +7,8 @@ import {
     AnalyzedFileContentDTO,
     CodeChunk,
     VectorSearchResult,
-    StoredCodeFlow
+    StoredCodeFlow,
+    GitAnalysis
 } from "../../types/database";
 import {
     computeContentHash,
@@ -518,6 +519,42 @@ export async function getStoredAnalysisByRepositoryId(
         security: securityAnalysis,
         files: filesRes.rows,
         dependencies: dependenciesRes.rows
+    };
+}
+
+export async function getStoredGitAnalysisByRepositoryId(
+    id: string
+): Promise<{ repositoryId: string; git: GitAnalysis | null } | null> {
+    const pool = getPool();
+
+    const repoRes = await pool.query(
+        `SELECT id FROM repositories 
+         WHERE id::text = $1 OR full_name = $1 OR github_id::text = $1
+         LIMIT 1`,
+        [id]
+    );
+
+    if (repoRes.rows.length === 0) {
+        return null;
+    }
+
+    const repositoryId = repoRes.rows[0].id;
+
+    const analysisRes = await pool.query(
+        `SELECT git_analysis FROM analysis_results 
+         WHERE repository_id = $1 
+         ORDER BY analyzed_at DESC 
+         LIMIT 1`,
+        [repositoryId]
+    );
+
+    if (analysisRes.rows.length === 0) {
+        return { repositoryId, git: null };
+    }
+
+    return {
+        repositoryId,
+        git: analysisRes.rows[0].git_analysis || null
     };
 }
 

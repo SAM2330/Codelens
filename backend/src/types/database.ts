@@ -7,6 +7,7 @@ import { APIAnalysis } from "../services/apiAnalyzer";
 import { DatabaseAnalysis } from "../services/databaseAnalyzer";
 import { CodeFlow } from "../services/codeFlowAnalyzer";
 import { GitAnalysis } from "../services/gitAnalyzer";
+export { GitAnalysis } from "../services/gitAnalyzer";
 import { StaticAnalysis } from "../services/staticAnalyzer";
 import { SecurityAnalysis } from "../services/securityAnalyzer";
 

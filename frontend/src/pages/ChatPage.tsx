@@ -23,6 +23,18 @@ import { ErrorState } from "../components/ErrorState";
 
 const SUGGESTED_PROMPTS = [
     {
+        title: "Latest Commit Changes",
+        prompt: "What changed in the last commit?"
+    },
+    {
+        title: "Compare Recent Commits",
+        prompt: "What changed between the last two commits?"
+    },
+    {
+        title: "Streaming System Commits",
+        prompt: "Show commits that changed the streaming system."
+    },
+    {
         title: "Architecture Overview",
         prompt: "Explain the high-level project architecture, folder structure, and tech stack."
     },
@@ -33,21 +45,40 @@ const SUGGESTED_PROMPTS = [
     {
         title: "Database Models & Schemas",
         prompt: "What database models and relations are defined in this project?"
-    },
-    {
-        title: "API Endpoints & Routing",
-        prompt: "What API endpoints are available and how are requests routed and handled?"
-    },
-    {
-        title: "Error Handling & Middlewares",
-        prompt: "How are errors handled throughout the services and controllers?"
     }
 ];
+
+function loadStoredMessages(repoId?: string): ChatMessage[] {
+    if (!repoId) return [];
+    try {
+        const key = `codelens_chat_${repoId}`;
+        const saved = sessionStorage.getItem(key);
+        if (!saved) return [];
+
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+            return parsed
+                .filter((m: any) => m && typeof m === "object" && typeof m.content === "string")
+                .map((m: any, idx: number) => ({
+                    id: typeof m.id === "string" ? m.id : `restored_${idx}_${Date.now()}`,
+                    role: m.role === "assistant" ? "assistant" : "user",
+                    content: m.content,
+                    citations: Array.isArray(m.citations) ? m.citations : [],
+                    timestamp: m.timestamp ? new Date(m.timestamp) : new Date(),
+                    error: Boolean(m.error),
+                    errorMessage: typeof m.errorMessage === "string" ? m.errorMessage : undefined
+                }));
+        }
+    } catch (e) {
+        console.warn(`Failed to parse saved chat history for repo ${repoId}:`, e);
+    }
+    return [];
+}
 
 export const ChatPage: React.FC = () => {
     const { id } = useParams<{ id: string }>();
     const [repository, setRepository] = useState<StoredAnalysisResult["repository"] | null>(null);
-    const [messages, setMessages] = useState<ChatMessage[]>([]);
+    const [messages, setMessages] = useState<ChatMessage[]>(() => loadStoredMessages(id));
     const [input, setInput] = useState("");
     const [isLoading, setIsLoading] = useState(false);
     const [initialLoading, setInitialLoading] = useState(true);
@@ -55,10 +86,26 @@ export const ChatPage: React.FC = () => {
     
     const messagesEndRef = useRef<HTMLDivElement | null>(null);
     const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+    const isSubmittingRef = useRef<boolean>(false);
+    const abortControllerRef = useRef<AbortController | null>(null);
 
-    const storageKey = `codelens_chat_${id}`;
+    // Cancel in-flight request when component unmounts
+    useEffect(() => {
+        return () => {
+            if (abortControllerRef.current) {
+                abortControllerRef.current.abort();
+            }
+        };
+    }, []);
 
-    // Load initial repository info & session chat history
+    // Sync messages state when repository ID changes in the URL
+    useEffect(() => {
+        setMessages(loadStoredMessages(id));
+        setInput("");
+        setError(null);
+    }, [id]);
+
+    // Load initial repository info
     useEffect(() => {
         if (!id) return;
 
@@ -70,21 +117,6 @@ export const ChatPage: React.FC = () => {
                 if (repoData && repoData.repository) {
                     setRepository(repoData.repository);
                 }
-
-                // Restore session history from sessionStorage
-                const saved = sessionStorage.getItem(storageKey);
-                if (saved) {
-                    try {
-                        const parsed = JSON.parse(saved);
-                        const restored = parsed.map((m: any) => ({
-                            ...m,
-                            timestamp: new Date(m.timestamp)
-                        }));
-                        setMessages(restored);
-                    } catch (e) {
-                        console.warn("Failed to parse saved chat history:", e);
-                    }
-                }
             } catch (err) {
                 console.error("Failed to load repository details:", err);
                 setError(err instanceof Error ? err.message : "Failed to load repository");
@@ -94,16 +126,22 @@ export const ChatPage: React.FC = () => {
         }
 
         loadData();
-    }, [id, storageKey]);
+    }, [id]);
 
-    // Save chat history to sessionStorage on update
+    // Persist chat history to sessionStorage whenever messages change
     useEffect(() => {
+        if (!id) return;
+        const storageKey = `codelens_chat_${id}`;
         if (messages.length > 0) {
-            sessionStorage.setItem(storageKey, JSON.stringify(messages));
+            try {
+                sessionStorage.setItem(storageKey, JSON.stringify(messages));
+            } catch (err) {
+                console.warn("Failed to persist messages to sessionStorage:", err);
+            }
         } else {
             sessionStorage.removeItem(storageKey);
         }
-    }, [messages, storageKey]);
+    }, [messages, id]);
 
     // Scroll to bottom on new message
     useEffect(() => {
@@ -120,7 +158,11 @@ export const ChatPage: React.FC = () => {
 
     const handleSend = async (queryText?: string) => {
         const query = (queryText !== undefined ? queryText : input).trim();
-        if (!query || !id || isLoading) return;
+        if (!query || !id || isLoading || isSubmittingRef.current) return;
+
+        isSubmittingRef.current = true;
+        setIsLoading(true);
+        setError(null);
 
         const userMessageId = `user_${Date.now()}`;
         const assistantMessageId = `assistant_${Date.now()}`;
@@ -134,11 +176,12 @@ export const ChatPage: React.FC = () => {
 
         setMessages((prev) => [...prev, userMessage]);
         setInput("");
-        setIsLoading(true);
-        setError(null);
+
+        const controller = new AbortController();
+        abortControllerRef.current = controller;
 
         try {
-            const response = await askRepositoryQuestion(id, query);
+            const response = await askRepositoryQuestion(id, query, controller.signal);
 
             const assistantMessage: ChatMessage = {
                 id: assistantMessageId,
@@ -150,6 +193,11 @@ export const ChatPage: React.FC = () => {
 
             setMessages((prev) => [...prev, assistantMessage]);
         } catch (err: any) {
+            if (controller.signal.aborted) {
+                console.log("Chat question was cancelled.");
+                return;
+            }
+
             console.error("Chat question failed:", err);
             const errorMessage = err instanceof Error ? err.message : "Failed to get AI answer";
             
@@ -164,7 +212,9 @@ export const ChatPage: React.FC = () => {
 
             setMessages((prev) => [...prev, errorAssistantMessage]);
         } finally {
+            isSubmittingRef.current = false;
             setIsLoading(false);
+            abortControllerRef.current = null;
             setTimeout(() => textareaRef.current?.focus(), 50);
         }
     };
@@ -178,8 +228,10 @@ export const ChatPage: React.FC = () => {
 
     const handleClearChat = () => {
         if (window.confirm("Are you sure you want to clear the chat history for this repository?")) {
+            if (id) {
+                sessionStorage.removeItem(`codelens_chat_${id}`);
+            }
             setMessages([]);
-            sessionStorage.removeItem(storageKey);
         }
     };
 
@@ -243,8 +295,8 @@ export const ChatPage: React.FC = () => {
                         </div>
                         <h2 className="chat-empty-title">Ask anything about this codebase</h2>
                         <p className="chat-empty-desc">
-                            CodeLens uses semantic vector search and AST code analysis to provide
-                            precise answers with direct source-code citations.
+                            CodeLens uses semantic vector search, AST code analysis, and Git history intelligence
+                            to provide precise answers grounded in code and commit history.
                         </p>
 
                         <div className="chat-suggested-section">
@@ -321,6 +373,16 @@ export const ChatPage: React.FC = () => {
                                                      message.errorMessage?.includes("429")) ? (
                                                     <div className="text-xs text-amber-300/90 mt-2 bg-amber-950/40 p-2 rounded border border-amber-800/40">
                                                         Note: Gemini API free-tier rate limits reset every minute. Please wait a moment and try again.
+                                                    </div>
+                                                ) : ((message.errorMessage?.toLowerCase().includes("time") && message.errorMessage?.toLowerCase().includes("out")) ||
+                                                     message.errorMessage?.includes("504")) ? (
+                                                    <div className="text-xs text-amber-300/90 mt-2 bg-amber-950/40 p-2 rounded border border-amber-800/40">
+                                                        Note: The AI request timed out before completing. Please try asking again.
+                                                    </div>
+                                                ) : (message.errorMessage?.toLowerCase().includes("retrieval") ||
+                                                     message.errorMessage?.toLowerCase().includes("retrieve")) ? (
+                                                    <div className="text-xs text-amber-300/90 mt-2 bg-amber-950/40 p-2 rounded border border-amber-800/40">
+                                                        Note: Could not retrieve relevant context for this repository query.
                                                     </div>
                                                 ) : null}
                                             </div>
@@ -402,7 +464,7 @@ export const ChatPage: React.FC = () => {
                         value={input}
                         onChange={(e) => setInput(e.target.value)}
                         onKeyDown={handleKeyDown}
-                        placeholder="Ask a question about this repository's code, architecture, or APIs... (Enter to send, Shift+Enter for new line)"
+                        placeholder="Ask a question about this repository's code, architecture, or Git history... (Enter to send, Shift+Enter for new line)"
                         className="chat-textarea"
                         rows={1}
                         disabled={isLoading}
@@ -423,7 +485,7 @@ export const ChatPage: React.FC = () => {
                 </form>
 
                 <div className="chat-input-hint">
-                    <span>💡 Grounded in repository code with verifiable file and line citations.</span>
+                    <span>💡 Grounded in repository code & Git commit history with verifiable file citations.</span>
                 </div>
             </div>
         </div>
