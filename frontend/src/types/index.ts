@@ -236,3 +236,21 @@ export interface StoredAnalysisResult {
     dependencies: DependencyItem[];
     message?: string;
 }
+
+export interface AskRepositoryResponse {
+    repositoryId: string;
+    query: string;
+    answer: string;
+    citations: Citation[];
+}
+
+export interface ChatMessage {
+    id: string;
+    role: "user" | "assistant";
+    content: string;
+    citations?: Citation[];
+    timestamp: Date;
+    error?: boolean;
+    errorMessage?: string;
+}
+

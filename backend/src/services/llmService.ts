@@ -3,7 +3,77 @@ import { Citation, LlmAnswer, RagSource } from "../types/database";
 import { isQuotaExceededError } from "./embeddingService";
 
 export const DEFAULT_GEMINI_CHAT_MODEL =
-    process.env.GEMINI_CHAT_MODEL || "gemini-3.5-flash";
+    process.env.GEMINI_CHAT_MODEL || "gemini-flash-latest";
+
+export const FALLBACK_GEMINI_CHAT_MODELS = [
+    DEFAULT_GEMINI_CHAT_MODEL,
+    "gemini-3.5-flash",
+    "gemini-3.5-flash-lite",
+    "gemini-flash-lite-latest"
+].filter((m, idx, arr) => arr.indexOf(m) === idx);
+
+export function isRateLimitOrQuotaError(error: unknown): boolean {
+    if (!error) return false;
+    if (typeof error === "object") {
+        const err = error as Record<string, any>;
+        if (
+            err.status === 429 ||
+            err.code === 429 ||
+            err.statusCode === 429 ||
+            err.status === "RESOURCE_EXHAUSTED" ||
+            err.error?.code === 429 ||
+            err.error?.status === "RESOURCE_EXHAUSTED"
+        ) {
+            return true;
+        }
+        const msg = String(err.message || err.error?.message || err.details || "").toLowerCase();
+        if (
+            msg.includes("429") ||
+            msg.includes("resource_exhausted") ||
+            msg.includes("quota") ||
+            msg.includes("rate limit") ||
+            msg.includes("too many requests")
+        ) {
+            return true;
+        }
+    }
+    const str = String(error).toLowerCase();
+    return (
+        str.includes("429") ||
+        str.includes("resource_exhausted") ||
+        str.includes("quota") ||
+        str.includes("too many requests")
+    );
+}
+
+export function isUnavailableOrDemandError(error: unknown): boolean {
+    if (!error) return false;
+    if (typeof error === "object") {
+        const err = error as Record<string, any>;
+        if (
+            err.status === 503 ||
+            err.code === 503 ||
+            err.statusCode === 503 ||
+            err.status === "UNAVAILABLE" ||
+            err.error?.code === 503 ||
+            err.error?.status === "UNAVAILABLE"
+        ) {
+            return true;
+        }
+        const msg = String(err.message || err.error?.message || err.details || "").toLowerCase();
+        if (
+            msg.includes("503") ||
+            msg.includes("unavailable") ||
+            msg.includes("high demand") ||
+            msg.includes("spikes in demand") ||
+            msg.includes("service unavailable")
+        ) {
+            return true;
+        }
+    }
+    const str = String(error).toLowerCase();
+    return str.includes("503") || str.includes("unavailable") || str.includes("high demand");
+}
 
 export const CODE_LENS_SYSTEM_INSTRUCTION = `You are CodeLens, an expert GitHub repository code-analysis assistant.
 
@@ -122,82 +192,120 @@ export async function generateRepositoryAnswer(
         };
     }
 
-    const modelName = options?.model || DEFAULT_GEMINI_CHAT_MODEL;
     const ai = getGenAIClient();
     const promptContent = buildPrompt(trimmedQuery, trimmedContext);
 
-    try {
-        const response = await ai.models.generateContent({
-            model: modelName,
-            contents: promptContent,
-            config: {
-                systemInstruction: CODE_LENS_SYSTEM_INSTRUCTION,
-                temperature: 0.2,
-                responseMimeType: "application/json"
-            }
-        });
+    const modelsToTry = options?.model
+        ? [options.model]
+        : FALLBACK_GEMINI_CHAT_MODELS;
 
-        const rawText = response.text ? response.text.trim() : "";
+    let lastError: unknown;
 
-        if (!rawText) {
-            return {
-                answer: "I couldn't find enough relevant code in the analyzed repository to answer this reliably.",
-                citations: [],
-                model: modelName
-            };
-        }
+    for (const modelName of modelsToTry) {
+        // Attempt model with up to 2 tries for transient spikes
+        for (let attempt = 1; attempt <= 2; attempt++) {
+            try {
+                const response = await ai.models.generateContent({
+                    model: modelName,
+                    contents: promptContent,
+                    config: {
+                        systemInstruction: CODE_LENS_SYSTEM_INSTRUCTION,
+                        temperature: 0.2,
+                        responseMimeType: "application/json"
+                    }
+                });
 
-        let answer = rawText;
-        let candidateCitationIds: number[] = [];
+                const rawText = response.text ? response.text.trim() : "";
 
-        try {
-            // Strip any markdown fences if present
-            const cleanJson = rawText
-                .replace(/^```json\s*/i, "")
-                .replace(/\s*```$/i, "")
-                .trim();
-
-            const parsed = JSON.parse(cleanJson);
-            if (parsed && typeof parsed === "object") {
-                if (typeof parsed.answer === "string") {
-                    answer = parsed.answer.trim();
+                if (!rawText) {
+                    return {
+                        answer: "I couldn't find enough relevant code in the analyzed repository to answer this reliably.",
+                        citations: [],
+                        model: modelName
+                    };
                 }
-                if (Array.isArray(parsed.citationIds)) {
-                    candidateCitationIds = parsed.citationIds;
+
+                let answer = rawText;
+                let candidateCitationIds: number[] = [];
+
+                try {
+                    // Strip any markdown fences if present
+                    const cleanJson = rawText
+                        .replace(/^```json\s*/i, "")
+                        .replace(/\s*```$/i, "")
+                        .trim();
+
+                    const parsed = JSON.parse(cleanJson);
+                    if (parsed && typeof parsed === "object") {
+                        if (typeof parsed.answer === "string") {
+                            answer = parsed.answer.trim();
+                        }
+                        if (Array.isArray(parsed.citationIds)) {
+                            candidateCitationIds = parsed.citationIds;
+                        }
+                    }
+                } catch {
+                    // Fallback: rawText is used directly as plain answer
+                    console.warn("Could not parse LLM JSON output, falling back to text parsing.");
+                    answer = rawText;
                 }
+
+                const { validatedCitations, finalAnswer } = validateAndBuildCitations(
+                    candidateCitationIds,
+                    answer,
+                    ragSources
+                );
+
+                return {
+                    answer: finalAnswer,
+                    citations: validatedCitations,
+                    model: modelName
+                };
+            } catch (error) {
+                lastError = error;
+                const isUnavailable = isUnavailableOrDemandError(error);
+                const isQuota = isRateLimitOrQuotaError(error);
+
+                if (isUnavailable || isQuota) {
+                    console.warn(
+                        `Gemini model '${modelName}' attempt ${attempt} returned ${
+                            isUnavailable ? "503 UNAVAILABLE" : "429 RATE_LIMIT"
+                        }.`
+                    );
+                    if (attempt < 2) {
+                        await new Promise((resolve) => setTimeout(resolve, 1000 * attempt));
+                        continue; // Retry same model once
+                    }
+                    // Break out to try fallback model
+                    break;
+                }
+
+                // If non-transient, log and continue to fallback model
+                console.error(`Gemini LLM error with model '${modelName}':`, error);
+                break;
             }
-        } catch {
-            // Fallback: rawText is used directly as plain answer
-            console.warn("Could not parse LLM JSON output, falling back to text parsing.");
-            answer = rawText;
         }
-
-        const { validatedCitations, finalAnswer } = validateAndBuildCitations(
-            candidateCitationIds,
-            answer,
-            ragSources
-        );
-
-        return {
-            answer: finalAnswer,
-            citations: validatedCitations,
-            model: modelName
-        };
-    } catch (error) {
-        if (isQuotaExceededError(error)) {
-            const quotaErr = new Error(
-                "Gemini API quota exceeded (429 RESOURCE_EXHAUSTED). Please try again later."
-            );
-            (quotaErr as any).status = 429;
-            (quotaErr as any).isQuotaError = true;
-            throw quotaErr;
-        }
-
-        console.error("Gemini LLM generation failed:", {
-            model: modelName,
-            error: error instanceof Error ? error.message : "Unknown error"
-        });
-
-        throw error;
     }
+
+    // If all models failed, propagate categorized error
+    if (isRateLimitOrQuotaError(lastError)) {
+        const quotaErr = new Error(
+            "Gemini API rate limit or quota exceeded (429 RESOURCE_EXHAUSTED). Please try again in a moment."
+        );
+        (quotaErr as any).status = 429;
+        (quotaErr as any).isQuotaError = true;
+        throw quotaErr;
+    }
+
+    if (isUnavailableOrDemandError(lastError)) {
+        const demandErr = new Error(
+            "The AI service is currently experiencing temporary high demand (503 UNAVAILABLE). Please try again in a few moments."
+        );
+        (demandErr as any).status = 503;
+        (demandErr as any).isDemandError = true;
+        throw demandErr;
+    }
+
+    console.error("All Gemini chat model attempts exhausted:", lastError);
+    throw lastError;
 }

@@ -5,6 +5,7 @@ import { RepositoriesPage } from "./pages/RepositoriesPage";
 import { OverviewPage } from "./pages/OverviewPage";
 import { ArchitecturePage } from "./pages/ArchitecturePage";
 import { CodePage } from "./pages/CodePage";
+import { ChatPage } from "./pages/ChatPage";
 import { CodeFlowsPage } from "./pages/CodeFlowsPage";
 import { APIsPage } from "./pages/APIsPage";
 import { DatabasePage } from "./pages/DatabasePage";
@@ -18,6 +19,7 @@ export const App: React.FC = () => {
                     <Route path="/" element={<Navigate to="/repositories" replace />} />
                     <Route path="/repositories" element={<RepositoriesPage />} />
                     <Route path="/repositories/:id" element={<OverviewPage />} />
+                    <Route path="/repositories/:id/chat" element={<ChatPage />} />
                     <Route path="/repositories/:id/architecture" element={<ArchitecturePage />} />
                     <Route path="/repositories/:id/code" element={<CodePage />} />
                     <Route path="/repositories/:id/flows" element={<CodeFlowsPage />} />

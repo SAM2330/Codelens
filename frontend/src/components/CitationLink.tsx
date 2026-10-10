@@ -31,7 +31,7 @@ export const CitationLink: React.FC<CitationLinkProps> = ({
             <Link
                 to={url}
                 className={`citation-badge ${className}`}
-                title={`Jump to ${fileName} (${lineLabel})`}
+                title={`Jump to ${fileName} (${lineLabel}${citation.symbol ? ` - ${citation.symbol}` : ""})`}
             >
                 <span>[{citation.id}]</span>
             </Link>
@@ -48,6 +48,11 @@ export const CitationLink: React.FC<CitationLinkProps> = ({
                 <span className="citation-card-id">[{citation.id}]</span>
                 <FileCode size={14} className="text-blue-400" />
                 <span className="citation-card-file">{fileName}</span>
+                {citation.symbol && (
+                    <span className="citation-card-symbol">
+                        {citation.symbolType ? `${citation.symbolType} ` : ""}{citation.symbol}
+                    </span>
+                )}
                 <span className="citation-card-lines">{lineLabel}</span>
             </div>
             <ArrowUpRight size={14} className="citation-card-arrow" />

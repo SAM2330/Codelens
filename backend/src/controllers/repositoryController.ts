@@ -39,7 +39,11 @@ import {
 } from "../db/repositories/repositoryDb";
 import { searchSimilarChunks } from "../services/vectorSearchService";
 import { retrieveContext } from "../services/ragService";
-import { generateRepositoryAnswer } from "../services/llmService";
+import {
+    generateRepositoryAnswer,
+    isRateLimitOrQuotaError,
+    isUnavailableOrDemandError
+} from "../services/llmService";
 import {
     transformFlowToGraph,
     transformFlowsToGraphs
@@ -563,20 +567,23 @@ export async function askRepository(req: Request, res: Response) {
             });
         }
 
+        console.log(`[AskRepository] Starting RAG context retrieval for repo '${id}' with query: "${query}"`);
         // 1. Retrieve RAG context using existing RAG engine
         const ragResult = await retrieveContext(id, query);
 
         if (ragResult.notFound) {
+            console.warn(`[AskRepository] Repository '${id}' not found`);
             return res.status(404).json({
                 message: ragResult.message || `Repository '${id}' not found.`
             });
         }
 
         if (ragResult.quotaExceeded) {
+            console.warn(`[AskRepository] Quota exceeded during context retrieval for repo '${id}'`);
             return res.status(429).json({
                 message:
                     ragResult.message ||
-                    "Gemini API quota exceeded (429 RESOURCE_EXHAUSTED). Please try again later."
+                    "Gemini API rate limit or quota exceeded (429). Please try again in a moment."
             });
         }
 
@@ -587,6 +594,7 @@ export async function askRepository(req: Request, res: Response) {
             !ragResult.context ||
             ragResult.context.trim().length === 0
         ) {
+            console.log(`[AskRepository] No relevant context found for repo '${id}', returning graceful empty context response`);
             return res.json({
                 repositoryId: ragResult.repositoryId,
                 query: ragResult.query,
@@ -595,12 +603,16 @@ export async function askRepository(req: Request, res: Response) {
             });
         }
 
+        console.log(`[AskRepository] Retrieved ${ragResult.sourceCount} sources (${ragResult.context.length} chars). Generating grounded answer...`);
+
         // 3. Generate grounded answer via Gemini LLM service with validated citations
         const llmResult = await generateRepositoryAnswer(
             query,
             ragResult.context,
             ragResult.sources
         );
+
+        console.log(`[AskRepository] Answer generated successfully with ${llmResult.citations?.length || 0} citations using model '${llmResult.model || "default"}'`);
 
         return res.json({
             repositoryId: ragResult.repositoryId,
@@ -609,17 +621,48 @@ export async function askRepository(req: Request, res: Response) {
             citations: llmResult.citations
         });
     } catch (error) {
-        console.error("AI repository ask failed:", error);
-
         const isQuota =
-            (error as any)?.isQuotaError || (error as any)?.status === 429;
-        const statusCode = isQuota ? 429 : 500;
+            (error as any)?.isQuotaError ||
+            (error as any)?.status === 429 ||
+            isRateLimitOrQuotaError(error);
+
+        const isUnavailable =
+            (error as any)?.isDemandError ||
+            (error as any)?.status === 503 ||
+            isUnavailableOrDemandError(error);
+
+        const statusCode = isQuota ? 429 : isUnavailable ? 503 : 500;
+
+        let userMessage = "Failed to generate AI answer for repository";
+        if (isQuota) {
+            userMessage = "Gemini API rate limit or quota exceeded. Please wait a moment and try again.";
+        } else if (isUnavailable) {
+            userMessage = "The AI service is currently experiencing temporary high demand. Please try again shortly.";
+        }
+
+        const rawMsg = error instanceof Error ? error.message : "Unknown error";
+        let cleanDetail = userMessage;
+
+        // Extract clean detail if error is a raw upstream JSON string
+        try {
+            const parsed = JSON.parse(rawMsg);
+            if (parsed?.error?.message) {
+                cleanDetail = parsed.error.message;
+            }
+        } catch {
+            if (rawMsg && !rawMsg.includes("{")) {
+                cleanDetail = rawMsg;
+            }
+        }
+
+        console.error(`[AskRepository] Failed at stage (status ${statusCode}):`, {
+            userMessage,
+            detail: cleanDetail
+        });
 
         return res.status(statusCode).json({
-            message: isQuota
-                ? "Gemini API quota exceeded (429 RESOURCE_EXHAUSTED). Please try again later."
-                : "Failed to generate AI answer for repository",
-            error: error instanceof Error ? error.message : "Unknown error"
+            message: userMessage,
+            error: cleanDetail
         });
     }
 }

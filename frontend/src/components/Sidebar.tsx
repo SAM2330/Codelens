@@ -9,7 +9,8 @@ import {
     Network,
     Database,
     ShieldAlert,
-    BookOpen
+    BookOpen,
+    MessageSquare
 } from "lucide-react";
 
 interface SidebarProps {
@@ -80,6 +81,16 @@ export const Sidebar: React.FC<SidebarProps> = ({
                         >
                             <BookOpen size={18} />
                             <span>Overview</span>
+                        </NavLink>
+
+                        <NavLink
+                            to={`/repositories/${activeRepoId}/chat`}
+                            className={({ isActive }) =>
+                                `sidebar-link ${isActive ? "active" : ""}`
+                            }
+                        >
+                            <MessageSquare size={18} />
+                            <span>AI Chat</span>
                         </NavLink>
 
                         <NavLink
