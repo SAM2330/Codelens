@@ -158,3 +158,46 @@ CREATE INDEX IF NOT EXISTS idx_code_chunks_analysis_id ON code_chunks(analysis_i
 CREATE INDEX IF NOT EXISTS idx_code_chunks_file_path ON code_chunks(analysis_id, file_path);
 CREATE INDEX IF NOT EXISTS idx_code_chunks_repo_id ON code_chunks(repository_id);
 CREATE INDEX IF NOT EXISTS idx_code_chunks_embedding_cosine ON code_chunks USING hnsw (embedding vector_cosine_ops);
+
+-- Phase 25 additions:
+
+-- 10. User repositories table (User-to-repository ownership/access grants)
+CREATE TABLE IF NOT EXISTS user_repositories (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL,
+    repository_id UUID NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+    role TEXT NOT NULL DEFAULT 'owner',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (user_id, repository_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_repos_user_id ON user_repositories(user_id);
+CREATE INDEX IF NOT EXISTS idx_user_repos_repo_id ON user_repositories(repository_id);
+
+-- 11. User chat messages table (Per-user persistent chat history)
+CREATE TABLE IF NOT EXISTS user_chat_messages (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL,
+    repository_id UUID NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+    role TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
+    content TEXT NOT NULL,
+    citations JSONB DEFAULT '[]'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_chat_lookup ON user_chat_messages(user_id, repository_id, created_at);
+
+-- Row Level Security (RLS)
+ALTER TABLE user_chat_messages ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS user_chat_messages_owner_policy ON user_chat_messages;
+CREATE POLICY user_chat_messages_owner_policy ON user_chat_messages
+    FOR ALL
+    USING (auth.uid() = user_id)
+    WITH CHECK (auth.uid() = user_id);
+
+ALTER TABLE user_repositories ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS user_repositories_owner_policy ON user_repositories;
+CREATE POLICY user_repositories_owner_policy ON user_repositories
+    FOR ALL
+    USING (auth.uid() = user_id)
+    WITH CHECK (auth.uid() = user_id);

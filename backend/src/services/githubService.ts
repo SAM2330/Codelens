@@ -69,6 +69,92 @@ export async function getRepository(
     return response.json();
 }
 
+export interface NormalizedRepoIdentity {
+    owner: string;
+    repo: string;
+    fullName: string;
+    canonicalUrl: string;
+}
+
+/**
+ * Consistently normalizes a GitHub repository URL or slug into a stable identity.
+ * Handles trailing slashes, .git extensions, branch subpaths, and case.
+ */
+export function normalizeGitHubRepo(rawUrl: string): NormalizedRepoIdentity | null {
+    if (!rawUrl || typeof rawUrl !== "string") {
+        return null;
+    }
+
+    let cleaned = rawUrl.trim();
+
+    // Remove leading/trailing quotes or brackets
+    cleaned = cleaned.replace(/^['"<]+|['">]+$/g, "");
+
+    // If starts with git@github.com:owner/repo
+    if (cleaned.startsWith("git@github.com:")) {
+        cleaned = "https://github.com/" + cleaned.slice("git@github.com:".length);
+    }
+
+    // If bare slug "owner/repo"
+    if (!cleaned.includes("://") && !cleaned.startsWith("github.com")) {
+        const parts = cleaned.split("/").filter(Boolean);
+        if (parts.length === 2) {
+            const owner = parts[0];
+            const repo = parts[1].replace(/\.git$/i, "");
+            return {
+                owner,
+                repo,
+                fullName: `${owner}/${repo}`,
+                canonicalUrl: `https://github.com/${owner}/${repo}`
+            };
+        }
+    }
+
+    try {
+        let urlObj: URL;
+        if (!cleaned.includes("://")) {
+            urlObj = new URL(`https://${cleaned}`);
+        } else {
+            urlObj = new URL(cleaned);
+        }
+
+        if (urlObj.hostname !== "github.com" && urlObj.hostname !== "www.github.com") {
+            return null;
+        }
+
+        const segments = urlObj.pathname.split("/").filter(Boolean);
+        if (segments.length < 2) {
+            return null;
+        }
+
+        const owner = segments[0];
+        const repo = segments[1].replace(/\.git$/i, "");
+
+        return {
+            owner,
+            repo,
+            fullName: `${owner}/${repo}`,
+            canonicalUrl: `https://github.com/${owner}/${repo}`
+        };
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * Fetches the latest commit SHA for a repository ref (branch, tag, or commit).
+ */
+export async function getLatestCommitSha(
+    owner: string,
+    repo: string,
+    ref: string = "HEAD"
+): Promise<string> {
+    const data = await githubRequest<{ sha: string }>(
+        `/repos/${owner}/${repo}/commits/${encodeURIComponent(ref)}`
+    );
+    return data.sha;
+}
+
 export async function githubRequest<T>(
     endpoint: string
 ): Promise<T> {

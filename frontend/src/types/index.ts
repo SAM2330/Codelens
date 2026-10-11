@@ -10,6 +10,9 @@ export interface StoredRepository {
     created_at: string;
     updated_at: string;
     last_analyzed_at?: string | null;
+    is_private?: boolean;
+    isPrivate?: boolean;
+    userRole?: string;
 }
 
 export interface ProjectAnalysis {
@@ -235,6 +238,9 @@ export interface StoredAnalysisResult {
     files: AnalyzedFileItem[];
     dependencies: DependencyItem[];
     message?: string;
+    cached?: boolean;
+    commitSha?: string;
+    isPrivate?: boolean;
 }
 
 export interface AskRepositoryResponse {
@@ -252,5 +258,15 @@ export interface ChatMessage {
     timestamp: Date;
     error?: boolean;
     errorMessage?: string;
+}
+
+export interface PersistedChatMessage {
+    id: string;
+    userId: string;
+    repositoryId: string;
+    role: "user" | "assistant";
+    content: string;
+    citations?: Citation[];
+    createdAt: string;
 }
 

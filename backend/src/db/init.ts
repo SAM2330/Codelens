@@ -179,6 +179,35 @@ export async function initializeDatabase(): Promise<void> {
             ALTER TABLE analyzed_files ADD COLUMN IF NOT EXISTS size INTEGER;
             CREATE UNIQUE INDEX IF NOT EXISTS uq_code_chunks_analysis_file_symbol_lines ON code_chunks (analysis_id, file_path, symbol, symbol_type, start_line, end_line);
             CREATE INDEX IF NOT EXISTS idx_code_chunks_embedding_cosine ON code_chunks USING hnsw (embedding vector_cosine_ops);
+
+            -- Phase 25
+            ALTER TABLE repositories ADD COLUMN IF NOT EXISTS is_private BOOLEAN NOT NULL DEFAULT false;
+            ALTER TABLE analysis_results ADD COLUMN IF NOT EXISTS commit_sha TEXT;
+            ALTER TABLE analysis_results ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'completed';
+            ALTER TABLE analysis_results ADD COLUMN IF NOT EXISTS indexing_version TEXT NOT NULL DEFAULT '1.0';
+            CREATE INDEX IF NOT EXISTS idx_analysis_results_cache ON analysis_results(repository_id, commit_sha, status);
+
+            CREATE TABLE IF NOT EXISTS user_repositories (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                user_id UUID NOT NULL,
+                repository_id UUID NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+                role TEXT NOT NULL DEFAULT 'owner',
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                UNIQUE (user_id, repository_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_user_repos_user_id ON user_repositories(user_id);
+            CREATE INDEX IF NOT EXISTS idx_user_repos_repo_id ON user_repositories(repository_id);
+
+            CREATE TABLE IF NOT EXISTS user_chat_messages (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                user_id UUID NOT NULL,
+                repository_id UUID NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+                role TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
+                content TEXT NOT NULL,
+                citations JSONB DEFAULT '[]'::jsonb,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            );
+            CREATE INDEX IF NOT EXISTS idx_user_chat_lookup ON user_chat_messages(user_id, repository_id, created_at);
         `);
 
         console.log("Database schema initialized successfully.");

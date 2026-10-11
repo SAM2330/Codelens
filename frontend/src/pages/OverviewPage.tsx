@@ -99,6 +99,35 @@ export const OverviewPage: React.FC = () => {
                         {repository.default_branch && (
                             <span className="badge badge-blue">{repository.default_branch}</span>
                         )}
+                        {analysis.commitSha && (
+                            <span
+                                className="badge"
+                                style={{
+                                    backgroundColor: "rgba(139, 92, 246, 0.15)",
+                                    color: "#a78bfa",
+                                    border: "1px solid rgba(139, 92, 246, 0.3)",
+                                    fontFamily: "var(--font-mono)",
+                                    fontSize: "0.75rem"
+                                }}
+                                title={`Analyzed commit SHA: ${analysis.commitSha}`}
+                            >
+                                commit:{analysis.commitSha.slice(0, 7)}
+                            </span>
+                        )}
+                        {analysis.cached && (
+                            <span
+                                className="badge"
+                                style={{
+                                    backgroundColor: "rgba(16, 185, 129, 0.15)",
+                                    color: "#34d399",
+                                    border: "1px solid rgba(16, 185, 129, 0.3)",
+                                    fontWeight: 600,
+                                    fontSize: "0.75rem"
+                                }}
+                            >
+                                ⚡ Cache Hit (Reused)
+                            </span>
+                        )}
                     </div>
                     <p className="page-subtitle">
                         {repository.description || "No repository description available."}

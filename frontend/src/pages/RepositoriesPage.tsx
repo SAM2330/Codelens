@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
-import { fetchRepositories } from "../services/api";
+import { Link, useNavigate } from "react-router-dom";
+import { fetchUserRepositories } from "../services/api";
 import { StoredRepository } from "../types";
 import { LoadingState } from "../components/LoadingState";
 import { ErrorState } from "../components/ErrorState";
@@ -13,10 +13,15 @@ import {
     ExternalLink,
     GitBranch,
     Calendar,
-    ArrowRight
+    ArrowRight,
+    LogIn,
+    Shield
 } from "lucide-react";
+import { useAuth } from "../context/AuthContext";
 
 export const RepositoriesPage: React.FC = () => {
+    const { user, isLoading: authLoading } = useAuth();
+    const navigate = useNavigate();
     const [repositories, setRepositories] = useState<StoredRepository[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
@@ -24,31 +29,41 @@ export const RepositoriesPage: React.FC = () => {
     const [isAnalyzeOpen, setIsAnalyzeOpen] = useState(false);
 
     const loadData = async () => {
+        if (!user) {
+            setRepositories([]);
+            setLoading(false);
+            return;
+        }
+
         setLoading(true);
         setError(null);
         try {
-            const data = await fetchRepositories();
+            const data = await fetchUserRepositories();
             setRepositories(data || []);
         } catch (err: any) {
-            setError(err?.message || "Failed to load repositories");
+            setError(err?.message || "Failed to load your repositories");
         } finally {
             setLoading(false);
         }
     };
 
     useEffect(() => {
-        loadData();
-    }, []);
+        if (!authLoading) {
+            loadData();
+        }
+    }, [user, authLoading]);
 
-    const filtered = repositories.filter(
-        (r) =>
-            r.name.toLowerCase().includes(search.toLowerCase()) ||
-            r.owner.toLowerCase().includes(search.toLowerCase()) ||
-            (r.description && r.description.toLowerCase().includes(search.toLowerCase()))
-    );
+    const filtered = repositories.filter((r) => {
+        const query = search.toLowerCase();
+        return (
+            r.name.toLowerCase().includes(query) ||
+            r.owner.toLowerCase().includes(query) ||
+            (r.description && r.description.toLowerCase().includes(query))
+        );
+    });
 
-    if (loading) {
-        return <LoadingState message="Fetching repositories..." />;
+    if (authLoading || loading) {
+        return <LoadingState message="Loading your workspace..." />;
     }
 
     if (error) {
@@ -59,37 +74,41 @@ export const RepositoriesPage: React.FC = () => {
         <div>
             <div className="page-header" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "1rem" }}>
                 <div>
-                    <h1 className="page-title">Repositories</h1>
+                    <h1 className="page-title">{user ? "My Repositories" : "Repositories"}</h1>
                     <p className="page-subtitle">
-                        Explore ingested codebases and deep architectural analysis
+                        {user
+                            ? "Repositories analyzed in your personal workspace"
+                            : "Analyze GitHub repositories with deep architectural intelligence"}
                     </p>
                 </div>
 
                 <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
-                    <div style={{ position: "relative" }}>
-                        <Search
-                            size={16}
-                            style={{
-                                position: "absolute",
-                                left: "12px",
-                                top: "50%",
-                                transform: "translateY(-50%)",
-                                color: "var(--text-dim)"
-                            }}
-                        />
-                        <input
-                            type="text"
-                            placeholder="Filter repositories..."
-                            value={search}
-                            onChange={(e) => setSearch(e.target.value)}
-                            className="input-text"
-                            style={{
-                                margin: 0,
-                                paddingLeft: "36px",
-                                width: "240px"
-                            }}
-                        />
-                    </div>
+                    {user && (
+                        <div style={{ position: "relative" }}>
+                            <Search
+                                size={16}
+                                style={{
+                                    position: "absolute",
+                                    left: "12px",
+                                    top: "50%",
+                                    transform: "translateY(-50%)",
+                                    color: "var(--text-dim)"
+                                }}
+                            />
+                            <input
+                                type="text"
+                                placeholder="Filter repositories..."
+                                value={search}
+                                onChange={(e) => setSearch(e.target.value)}
+                                className="input-text"
+                                style={{
+                                    margin: 0,
+                                    paddingLeft: "36px",
+                                    width: "240px"
+                                }}
+                            />
+                        </div>
+                    )}
 
                     <button
                         className="btn btn-primary"
@@ -101,9 +120,29 @@ export const RepositoriesPage: React.FC = () => {
                 </div>
             </div>
 
-            {filtered.length === 0 ? (
+            {!user ? (
                 <EmptyState
-                    title={repositories.length === 0 ? "No repositories analyzed yet" : "No matching repositories"}
+                    title="Welcome to CodeLens"
+                    description="You are currently browsing as a guest. Analyze any public GitHub repository to explore its architecture, or sign in to save repositories to your personal workspace."
+                    action={
+                        <div style={{ display: "flex", gap: "1rem", justifyContent: "center" }}>
+                            <button
+                                className="btn btn-primary"
+                                onClick={() => setIsAnalyzeOpen(true)}
+                            >
+                                <Plus size={16} />
+                                <span>Analyze a Repository</span>
+                            </button>
+                            <Link to="/login" className="btn btn-secondary">
+                                <LogIn size={16} />
+                                <span>Sign In</span>
+                            </Link>
+                        </div>
+                    }
+                />
+            ) : filtered.length === 0 ? (
+                <EmptyState
+                    title={repositories.length === 0 ? "You haven't analyzed any repositories yet" : "No matching repositories"}
                     description={
                         repositories.length === 0
                             ? "Get started by analyzing your first GitHub repository to inspect its structure, APIs, and flows."
@@ -221,7 +260,12 @@ export const RepositoriesPage: React.FC = () => {
             <AnalyzeModal
                 isOpen={isAnalyzeOpen}
                 onClose={() => setIsAnalyzeOpen(false)}
-                onSuccess={() => loadData()}
+                onSuccess={(repoId) => {
+                    loadData();
+                    if (repoId) {
+                        navigate(`/repositories/${repoId}`);
+                    }
+                }}
             />
         </div>
     );

@@ -80,13 +80,26 @@ export async function upsertRepository(
 export async function saveAnalysis(
     repositoryId: string,
     analysis: FullAnalysisResult,
-    chunks?: CodeChunk[]
+    chunks?: CodeChunk[],
+    metadata?: {
+        commitSha?: string;
+        status?: string;
+        indexingVersion?: string;
+    }
 ): Promise<string> {
     const pool = getPool();
     const client = await pool.connect();
 
     try {
         await client.query("BEGIN");
+
+        const commitSha =
+            metadata?.commitSha ||
+            (analysis.git as any)?.commits?.[0]?.sha ||
+            (analysis.repository as any)?.default_branch_sha ||
+            "head";
+        const status = metadata?.status || "completed";
+        const indexingVersion = metadata?.indexingVersion || "1.0";
 
         // 1. Insert analysis result record
         const analysisResultQuery = `
@@ -99,9 +112,12 @@ export async function saveAnalysis(
                 static_analysis,
                 security_analysis,
                 raw_repository,
+                commit_sha,
+                status,
+                indexing_version,
                 analyzed_at
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW())
             RETURNING id;
         `;
 
@@ -113,7 +129,10 @@ export async function saveAnalysis(
             JSON.stringify(analysis.git),
             JSON.stringify(analysis.static),
             JSON.stringify(analysis.security),
-            JSON.stringify(analysis.repository)
+            JSON.stringify(analysis.repository),
+            commitSha,
+            status,
+            indexingVersion
         ];
 
         const analysisRes = await client.query<{ id: string }>(
@@ -396,10 +415,10 @@ export async function getStoredAnalysisByRepositoryId(
     const repository = repoRes.rows[0];
     const repositoryId = repository.id;
 
-    // Get latest analysis record
+    // Get latest completed analysis record
     const analysisRes = await pool.query(
         `SELECT * FROM analysis_results 
-         WHERE repository_id = $1 
+         WHERE repository_id = $1 AND (status IS NULL OR status = 'completed')
          ORDER BY analyzed_at DESC 
          LIMIT 1`,
         [repositoryId]
@@ -518,7 +537,11 @@ export async function getStoredAnalysisByRepositoryId(
         static: staticAnalysis,
         security: securityAnalysis,
         files: filesRes.rows,
-        dependencies: dependenciesRes.rows
+        dependencies: dependenciesRes.rows,
+        commitSha: latestAnalysis.commit_sha || null,
+        status: latestAnalysis.status || "completed",
+        indexingVersion: latestAnalysis.indexing_version || "1.0",
+        isPrivate: repository.is_private || false
     };
 }
 
@@ -542,7 +565,7 @@ export async function getStoredGitAnalysisByRepositoryId(
 
     const analysisRes = await pool.query(
         `SELECT git_analysis FROM analysis_results 
-         WHERE repository_id = $1 
+         WHERE repository_id = $1 AND (status IS NULL OR status = 'completed')
          ORDER BY analyzed_at DESC 
          LIMIT 1`,
         [repositoryId]
@@ -817,10 +840,10 @@ export async function getStoredCodeFlowsByRepositoryId(
 
     const resolvedRepoId = repoRes.rows[0].id;
 
-    // Get latest analysis ID
+    // Get latest completed analysis ID
     const analysisRes = await pool.query(
         `SELECT id FROM analysis_results 
-         WHERE repository_id = $1 
+         WHERE repository_id = $1 AND (status IS NULL OR status = 'completed')
          ORDER BY analyzed_at DESC 
          LIMIT 1`,
         [resolvedRepoId]
@@ -933,7 +956,7 @@ export async function getStoredAnalyzedFilesByRepositoryId(
 
     const analysisRes = await pool.query(
         `SELECT id FROM analysis_results 
-         WHERE repository_id = $1 
+         WHERE repository_id = $1 AND (status IS NULL OR status = 'completed')
          ORDER BY analyzed_at DESC 
          LIMIT 1`,
         [resolvedRepoId]
@@ -981,7 +1004,7 @@ export async function getStoredAnalyzedFileByPath(
 
     const analysisRes = await pool.query(
         `SELECT id FROM analysis_results 
-         WHERE repository_id = $1 
+         WHERE repository_id = $1 AND (status IS NULL OR status = 'completed')
          ORDER BY analyzed_at DESC 
          LIMIT 1`,
         [resolvedRepoId]
@@ -1040,5 +1063,251 @@ export async function getStoredAnalyzedFileByPath(
     }
 
     return { notFoundFile: true };
+}
+
+/**
+ * Searches for a completed analysis matching repository full name, commit SHA, and indexing version.
+ * Returns the full analysis payload if a valid cache hit exists.
+ */
+export async function findCompletedAnalysisByCommit(
+    fullName: string,
+    commitSha: string,
+    indexingVersion: string = "1.0"
+): Promise<any | null> {
+    const pool = getPool();
+
+    const query = `
+        SELECT 
+            r.id as repo_id,
+            r.full_name,
+            r.is_private,
+            a.id as analysis_id,
+            a.commit_sha,
+            a.status,
+            a.indexing_version,
+            a.analyzed_at
+        FROM repositories r
+        JOIN analysis_results a ON r.id = a.repository_id
+        WHERE LOWER(r.full_name) = LOWER($1)
+          AND a.commit_sha = $2
+          AND a.status = 'completed'
+          AND a.indexing_version = $3
+        ORDER BY a.analyzed_at DESC
+        LIMIT 1;
+    `;
+
+    const res = await pool.query(query, [fullName, commitSha, indexingVersion]);
+
+    if (res.rows.length === 0) {
+        return null;
+    }
+
+    const row = res.rows[0];
+    const fullAnalysis = await getStoredAnalysisByRepositoryId(row.repo_id);
+    return fullAnalysis;
+}
+
+/**
+ * Associates an authenticated user with a repository in user_repositories.
+ */
+export async function linkUserRepository(
+    userId: string,
+    repositoryId: string,
+    role: string = "owner"
+): Promise<void> {
+    const pool = getPool();
+    const query = `
+        INSERT INTO user_repositories (user_id, repository_id, role, created_at)
+        VALUES ($1, $2, $3, NOW())
+        ON CONFLICT (user_id, repository_id) 
+        DO UPDATE SET role = EXCLUDED.role;
+    `;
+    await pool.query(query, [userId, repositoryId, role]);
+}
+
+/**
+ * Retrieves all repositories in a specific authenticated user's workspace.
+ * If no userId is provided (guest), returns an empty array to prevent
+ * exposing repositories analyzed by other users.
+ */
+export async function getUserRepositories(userId?: string): Promise<any[]> {
+    if (!userId) {
+        return [];
+    }
+
+    const pool = getPool();
+    const query = `
+        SELECT 
+            r.id,
+            r.github_id as "githubId",
+            r.owner,
+            r.name,
+            r.full_name as "fullName",
+            r.github_url as "githubUrl",
+            r.default_branch as "defaultBranch",
+            r.description,
+            r.is_private as "isPrivate",
+            r.created_at as "createdAt",
+            r.updated_at as "updatedAt",
+            ur.role as "userRole",
+            MAX(a.analyzed_at) as "lastAnalyzedAt"
+        FROM user_repositories ur
+        JOIN repositories r ON ur.repository_id = r.id
+        LEFT JOIN analysis_results a ON r.id = a.repository_id AND (a.status IS NULL OR a.status = 'completed')
+        WHERE ur.user_id = $1
+        GROUP BY r.id, ur.role
+        ORDER BY r.updated_at DESC;
+    `;
+
+    const res = await pool.query(query, [userId]);
+    return res.rows;
+}
+
+/**
+ * Checks whether a user has permission to access a repository.
+ */
+export async function checkUserRepositoryAccess(
+    userId?: string,
+    repositoryIdOrName?: string
+): Promise<{ notFound: boolean; allowed: boolean; repository?: any }> {
+    if (!repositoryIdOrName) {
+        return { notFound: true, allowed: false };
+    }
+
+    const pool = getPool();
+    const repoRes = await pool.query(
+        `SELECT id, owner, name, full_name, is_private 
+         FROM repositories 
+         WHERE id::text = $1 OR LOWER(full_name) = LOWER($1) OR github_id::text = $1 
+         LIMIT 1`,
+        [repositoryIdOrName]
+    );
+
+    if (repoRes.rows.length === 0) {
+        return { notFound: true, allowed: false };
+    }
+
+    const repo = repoRes.rows[0];
+
+    // Public repositories are accessible to anyone
+    if (!repo.is_private) {
+        return { notFound: false, allowed: true, repository: repo };
+    }
+
+    // Private repositories require authenticated user with explicit access grant
+    if (!userId) {
+        return { notFound: false, allowed: false, repository: repo };
+    }
+
+    const accessRes = await pool.query(
+        `SELECT role FROM user_repositories 
+         WHERE user_id = $1 AND repository_id = $2 
+         LIMIT 1`,
+        [userId, repo.id]
+    );
+
+    if (accessRes.rows.length > 0) {
+        return { notFound: false, allowed: true, repository: repo };
+    }
+
+    return { notFound: false, allowed: false, repository: repo };
+}
+
+/**
+ * Fetches user-specific chat messages for a repository.
+ */
+export async function getUserChatMessages(
+    userId: string,
+    repositoryId: string
+): Promise<any[]> {
+    const pool = getPool();
+    const query = `
+        SELECT 
+            id,
+            user_id as "userId",
+            repository_id as "repositoryId",
+            role,
+            content,
+            citations,
+            created_at as "createdAt"
+        FROM user_chat_messages
+        WHERE user_id = $1 
+          AND (repository_id::text = $2 OR repository_id IN (SELECT id FROM repositories WHERE full_name = $2))
+        ORDER BY created_at ASC;
+    `;
+    const res = await pool.query(query, [userId, repositoryId]);
+    return res.rows;
+}
+
+/**
+ * Persists a chat message for an authenticated user.
+ */
+export async function saveUserChatMessage(
+    userId: string,
+    repositoryId: string,
+    role: "user" | "assistant",
+    content: string,
+    citations: any[] = []
+): Promise<any> {
+    const pool = getPool();
+
+    // Resolve repository UUID if full_name was passed
+    const repoRes = await pool.query(
+        `SELECT id FROM repositories WHERE id::text = $1 OR full_name = $1 LIMIT 1`,
+        [repositoryId]
+    );
+
+    const actualRepoId = repoRes.rows.length > 0 ? repoRes.rows[0].id : repositoryId;
+
+    const query = `
+        INSERT INTO user_chat_messages (
+            user_id,
+            repository_id,
+            role,
+            content,
+            citations,
+            created_at
+        )
+        VALUES ($1, $2, $3, $4, $5, NOW())
+        RETURNING 
+            id,
+            user_id as "userId",
+            repository_id as "repositoryId",
+            role,
+            content,
+            citations,
+            created_at as "createdAt";
+    `;
+
+    const res = await pool.query(query, [
+        userId,
+        actualRepoId,
+        role,
+        content,
+        JSON.stringify(citations || [])
+    ]);
+
+    return res.rows[0];
+}
+
+/**
+ * Deletes all chat messages for a user in a repository.
+ */
+export async function clearUserChatMessages(
+    userId: string,
+    repositoryId: string
+): Promise<void> {
+    const pool = getPool();
+    const repoRes = await pool.query(
+        `SELECT id FROM repositories WHERE id::text = $1 OR full_name = $1 LIMIT 1`,
+        [repositoryId]
+    );
+
+    const actualRepoId = repoRes.rows.length > 0 ? repoRes.rows[0].id : repositoryId;
+
+    await pool.query(
+        `DELETE FROM user_chat_messages WHERE user_id = $1 AND repository_id = $2`,
+        [userId, actualRepoId]
+    );
 }
 

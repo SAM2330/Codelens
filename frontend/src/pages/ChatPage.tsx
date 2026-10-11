@@ -15,11 +15,17 @@ import {
     ArrowRight,
     Terminal
 } from "lucide-react";
-import { askRepositoryQuestion, fetchRepositoryById } from "../services/api";
+import {
+    askRepositoryQuestion,
+    fetchRepositoryById,
+    fetchUserChatMessages,
+    clearUserChatMessages
+} from "../services/api";
 import { ChatMessage, Citation, StoredAnalysisResult } from "../types";
 import { CitationLink } from "../components/CitationLink";
 import { LoadingState } from "../components/LoadingState";
 import { ErrorState } from "../components/ErrorState";
+import { useAuth } from "../context/AuthContext";
 
 const SUGGESTED_PROMPTS = [
     {
@@ -48,10 +54,19 @@ const SUGGESTED_PROMPTS = [
     }
 ];
 
-function loadStoredMessages(repoId?: string): ChatMessage[] {
+function getChatStorageKey(userId?: string | null, repoId?: string): string | null {
+    if (!repoId) return null;
+    if (userId) {
+        return `codelens_chat_user_${userId}_${repoId}`;
+    }
+    return `codelens_chat_guest_${repoId}`;
+}
+
+function loadStoredMessages(userId?: string | null, repoId?: string): ChatMessage[] {
     if (!repoId) return [];
     try {
-        const key = `codelens_chat_${repoId}`;
+        const key = getChatStorageKey(userId, repoId);
+        if (!key) return [];
         const saved = sessionStorage.getItem(key);
         if (!saved) return [];
 
@@ -77,8 +92,9 @@ function loadStoredMessages(repoId?: string): ChatMessage[] {
 
 export const ChatPage: React.FC = () => {
     const { id } = useParams<{ id: string }>();
+    const { user } = useAuth();
     const [repository, setRepository] = useState<StoredAnalysisResult["repository"] | null>(null);
-    const [messages, setMessages] = useState<ChatMessage[]>(() => loadStoredMessages(id));
+    const [messages, setMessages] = useState<ChatMessage[]>([]);
     const [input, setInput] = useState("");
     const [isLoading, setIsLoading] = useState(false);
     const [initialLoading, setInitialLoading] = useState(true);
@@ -88,6 +104,7 @@ export const ChatPage: React.FC = () => {
     const textareaRef = useRef<HTMLTextAreaElement | null>(null);
     const isSubmittingRef = useRef<boolean>(false);
     const abortControllerRef = useRef<AbortController | null>(null);
+    const activeUserIdRef = useRef<string | null>(user?.id || null);
 
     // Cancel in-flight request when component unmounts
     useEffect(() => {
@@ -98,12 +115,67 @@ export const ChatPage: React.FC = () => {
         };
     }, []);
 
-    // Sync messages state when repository ID changes in the URL
+    // Load server-persisted chat messages if user is signed in, or isolated guest storage
     useEffect(() => {
-        setMessages(loadStoredMessages(id));
+        if (!id) return;
+        const currentReqUser = user?.id || null;
+        activeUserIdRef.current = currentReqUser;
+
+        // Cancel any pending AI request on user switch or repo change
+        if (abortControllerRef.current) {
+            abortControllerRef.current.abort();
+            abortControllerRef.current = null;
+        }
+        setIsLoading(false);
+        isSubmittingRef.current = false;
+
+        // Immediately reset messages state to avoid flashing previous user's messages
+        setMessages([]);
+
+        let isCancelled = false;
+
+        if (currentReqUser) {
+            // Authenticated: load from backend
+            fetchUserChatMessages(id)
+                .then((serverMsgs) => {
+                    // Stale check: ensure this response still belongs to the active user!
+                    if (isCancelled || activeUserIdRef.current !== currentReqUser) return;
+                    if (serverMsgs && serverMsgs.length > 0) {
+                        setMessages(
+                            serverMsgs.map((m) => ({
+                                id: m.id,
+                                role: m.role,
+                                content: m.content,
+                                citations: m.citations || [],
+                                timestamp: new Date(m.createdAt)
+                            }))
+                        );
+                    } else {
+                        const local = loadStoredMessages(currentReqUser, id);
+                        if (!isCancelled && activeUserIdRef.current === currentReqUser) {
+                            setMessages(local);
+                        }
+                    }
+                })
+                .catch((err) => {
+                    if (isCancelled || activeUserIdRef.current !== currentReqUser) return;
+                    console.warn("Could not fetch server chat messages:", err);
+                    const local = loadStoredMessages(currentReqUser, id);
+                    setMessages(local);
+                });
+        } else {
+            // Guest: strictly load ONLY temporary guest messages
+            const guestMsgs = loadStoredMessages(null, id);
+            setMessages(guestMsgs);
+        }
+
         setInput("");
         setError(null);
-    }, [id]);
+
+        return () => {
+            isCancelled = true;
+        };
+    }, [id, user?.id]);
 
     // Load initial repository info
     useEffect(() => {
@@ -128,10 +200,15 @@ export const ChatPage: React.FC = () => {
         loadData();
     }, [id]);
 
-    // Persist chat history to sessionStorage whenever messages change
+    // Persist chat history to user-isolated sessionStorage whenever messages change
     useEffect(() => {
         if (!id) return;
-        const storageKey = `codelens_chat_${id}`;
+        const currentUserId = user?.id || null;
+        if (activeUserIdRef.current !== currentUserId) return;
+
+        const storageKey = getChatStorageKey(currentUserId, id);
+        if (!storageKey) return;
+
         if (messages.length > 0) {
             try {
                 sessionStorage.setItem(storageKey, JSON.stringify(messages));
@@ -141,7 +218,7 @@ export const ChatPage: React.FC = () => {
         } else {
             sessionStorage.removeItem(storageKey);
         }
-    }, [messages, id]);
+    }, [messages, id, user?.id]);
 
     // Scroll to bottom on new message
     useEffect(() => {
@@ -229,7 +306,16 @@ export const ChatPage: React.FC = () => {
     const handleClearChat = () => {
         if (window.confirm("Are you sure you want to clear the chat history for this repository?")) {
             if (id) {
-                sessionStorage.removeItem(`codelens_chat_${id}`);
+                const currentUserId = user?.id || null;
+                const storageKey = getChatStorageKey(currentUserId, id);
+                if (storageKey) {
+                    sessionStorage.removeItem(storageKey);
+                }
+                if (user) {
+                    clearUserChatMessages(id).catch((err) => {
+                        console.warn("Failed to clear chat messages on server:", err);
+                    });
+                }
             }
             setMessages([]);
         }

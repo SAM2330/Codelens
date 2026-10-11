@@ -1,5 +1,9 @@
 import { Request, Response } from "express";
-import { getRepository } from "../services/githubService";
+import {
+    getRepository,
+    getLatestCommitSha,
+    normalizeGitHubRepo
+} from "../services/githubService";
 import { downloadRepository } from "../services/repositoryService";
 import {
     analyzeFile,
@@ -28,6 +32,7 @@ import {
     upsertRepository,
     saveAnalysis,
     getAllRepositories,
+    getUserRepositories,
     getStoredAnalysisByRepositoryId,
     getChunksByRepositoryId,
     getChunksWithoutEmbeddings,
@@ -36,8 +41,12 @@ import {
     getStoredCodeFlowById,
     getStoredAnalyzedFilesByRepositoryId,
     getStoredAnalyzedFileByPath,
-    getStoredGitAnalysisByRepositoryId
+    getStoredGitAnalysisByRepositoryId,
+    findCompletedAnalysisByCommit,
+    linkUserRepository,
+    saveUserChatMessage
 } from "../db/repositories/repositoryDb";
+import { getPool } from "../db/client";
 import { searchSimilarChunks } from "../services/vectorSearchService";
 import { retrieveContext } from "../services/ragService";
 import {
@@ -55,6 +64,9 @@ import {
 } from "../services/codeFlowGraphService";
 import { FullAnalysisResult } from "../types/database";
 
+// In-memory mutex for concurrent repository analysis deduplication
+const inFlightAnalyses = new Map<string, Promise<any>>();
+
 export async function analyzeRepository(req: Request, res: Response) {
     try {
         const { url } = req.body;
@@ -65,28 +77,140 @@ export async function analyzeRepository(req: Request, res: Response) {
             });
         }
 
-        const githubUrl = new URL(url);
-
-        if (githubUrl.hostname !== "github.com") {
+        const normalized = normalizeGitHubRepo(url);
+        if (!normalized) {
             return res.status(400).json({
                 message: "Invalid GitHub repository URL"
             });
         }
 
-        const parts = githubUrl.pathname
-            .split("/")
-            .filter(Boolean);
+        const { owner, repo, fullName } = normalized;
+        console.log(`1. Getting repository metadata for ${fullName}...`);
+        
+        let repository: any;
+        try {
+            repository = await getRepository(owner, repo);
+        } catch (ghErr) {
+            console.warn(`[GitHub] Could not fetch remote metadata for ${fullName}, checking database:`, ghErr);
+            const pool = getPool();
+            const storedRepoRes = await pool.query(
+                "SELECT * FROM repositories WHERE LOWER(full_name) = LOWER($1) LIMIT 1",
+                [fullName]
+            );
+            if (storedRepoRes.rows.length > 0) {
+                const row = storedRepoRes.rows[0];
+                repository = {
+                    id: row.github_id,
+                    name: row.name,
+                    full_name: row.full_name,
+                    owner: { login: row.owner },
+                    html_url: row.github_url,
+                    description: row.description,
+                    default_branch: row.default_branch
+                };
+            } else {
+                throw ghErr;
+            }
+        }
 
-        if (parts.length < 2) {
-            return res.status(400).json({
-                message: "Invalid GitHub repository URL"
+        // Fetch latest commit SHA for repository versioning & caching
+        let commitSha = "head";
+        try {
+            commitSha = await getLatestCommitSha(
+                owner,
+                repo,
+                repository.default_branch || "HEAD"
+            );
+            console.log(`Commit SHA for ${fullName}@${repository.default_branch}: ${commitSha}`);
+        } catch (shaErr) {
+            console.warn("Could not fetch remote commit SHA from GitHub, checking stored analysis commit:", shaErr);
+            try {
+                const pool = getPool();
+                const lastShaRes = await pool.query(
+                    `SELECT a.commit_sha 
+                     FROM analysis_results a
+                     JOIN repositories r ON a.repository_id = r.id
+                     WHERE LOWER(r.full_name) = LOWER($1) AND a.status = 'completed' AND a.commit_sha IS NOT NULL
+                     ORDER BY a.analyzed_at DESC LIMIT 1`,
+                    [fullName]
+                );
+                if (lastShaRes.rows.length > 0 && lastShaRes.rows[0].commit_sha) {
+                    commitSha = lastShaRes.rows[0].commit_sha;
+                    console.log(`Reusing last known completed commit SHA for ${fullName}: ${commitSha}`);
+                }
+            } catch (dbErr) {
+                console.warn("Could not check stored analysis commit:", dbErr);
+            }
+        }
+
+        const cacheKey = `${fullName.toLowerCase()}@${commitSha}`;
+
+        // 1. Check for concurrent in-flight analysis
+        if (inFlightAnalyses.has(cacheKey)) {
+            console.log(`[Shared Cache] Awaiting concurrent in-flight analysis for ${cacheKey}...`);
+            const inFlightResult = await inFlightAnalyses.get(cacheKey)!;
+            if (req.user) {
+                try {
+                    await linkUserRepository(req.user.id, inFlightResult.id, "owner");
+                    console.log(`[Shared Cache] Associated user ${req.user.id} with repo ${inFlightResult.id}`);
+                } catch (linkErr) {
+                    console.error("Failed to link repository to user on in-flight analysis:", linkErr);
+                }
+            }
+            return res.json({
+                ...inFlightResult,
+                cached: true,
+                commitSha
             });
         }
 
-        const owner = parts[0];
-        const repo = parts[1];
-        console.log("1. Getting repository...");
-        const repository = await getRepository(owner, repo);
+        // 2. Check database for existing completed analysis cache hit
+        const cachedAnalysis = await findCompletedAnalysisByCommit(fullName, commitSha, "1.0");
+        if (cachedAnalysis) {
+            console.log(`[Shared Cache Hit] Reusing stored analysis for ${fullName} at commit ${commitSha}`);
+
+            // Associate authenticated user with this repository
+            if (req.user) {
+                try {
+                    await linkUserRepository(req.user.id, cachedAnalysis.id, "owner");
+                    console.log(`[Shared Cache Hit] Associated user ${req.user.id} with repo ${cachedAnalysis.id}`);
+                } catch (linkErr) {
+                    console.error("Failed to link repository to user on cache hit:", linkErr);
+                }
+            }
+
+            // If any chunks lack embeddings, generate only genuinely missing chunks
+            if (process.env.GEMINI_API_KEY) {
+                try {
+                    const missingChunks = await getChunksWithoutEmbeddings(cachedAnalysis.id);
+                    if (missingChunks.length > 0) {
+                        console.log(`[Shared Cache Hit] Generating embeddings for ${missingChunks.length} missing chunks...`);
+                        const embedResult = await generateEmbeddingsForChunks(
+                            missingChunks.map((c) => ({
+                                id: c.id!,
+                                filePath: c.filePath,
+                                symbol: c.symbol,
+                                symbolType: c.symbolType,
+                                content: c.content,
+                                contentHash: c.contentHash
+                            }))
+                        );
+                        await saveChunkEmbeddings(embedResult.embeddings);
+                    }
+                } catch (embedError) {
+                    console.warn("[Shared Cache Hit] Embedding generation for missing chunks deferred:", embedError);
+                }
+            }
+
+            return res.json({
+                ...cachedAnalysis,
+                cached: true,
+                commitSha
+            });
+        }
+
+        // 3. Cache Miss: Execute full analysis pipeline
+        console.log(`[Shared Cache Miss] Starting fresh analysis for ${fullName} at commit ${commitSha}`);
         console.log("2. Downloading repository...");
         const directory = await downloadRepository(
             owner,
@@ -178,6 +302,7 @@ export async function analyzeRepository(req: Request, res: Response) {
         };
 
         // Persist to PostgreSQL / Supabase
+        let storedRepoId: string | undefined;
         try {
             console.log("8. Persisting analysis results and code chunks to database...");
             const storedRepo = await upsertRepository({
@@ -189,9 +314,19 @@ export async function analyzeRepository(req: Request, res: Response) {
                 defaultBranch: repository.default_branch || "main",
                 description: repository.description || null
             });
+            storedRepoId = storedRepo.id;
 
-            await saveAnalysis(storedRepo.id, analysisPayload, chunks);
+            await saveAnalysis(storedRepo.id, analysisPayload, chunks, {
+                commitSha,
+                status: "completed",
+                indexingVersion: "1.0"
+            });
             console.log("9. Analysis results and code chunks persisted successfully.");
+
+            // Link requesting user if authenticated
+            if (req.user) {
+                await linkUserRepository(req.user.id, storedRepo.id, "owner");
+            }
 
             // Optional automatic embedding generation if GEMINI_API_KEY is configured
             if (process.env.GEMINI_API_KEY) {
@@ -223,7 +358,12 @@ export async function analyzeRepository(req: Request, res: Response) {
             // Non-blocking: Still return analysis to client if DB fails or is unconfigured
         }
 
-        return res.json(analysisPayload);
+        return res.json({
+            id: storedRepoId,
+            ...analysisPayload,
+            cached: false,
+            commitSha
+        });
     } catch (error) {
         console.error(error);
 
@@ -236,7 +376,7 @@ export async function analyzeRepository(req: Request, res: Response) {
 
 export async function getRepositories(req: Request, res: Response) {
     try {
-        const repositories = await getAllRepositories();
+        const repositories = await getUserRepositories(req.user?.id);
         return res.json(repositories);
     } catch (error) {
         console.error("Failed to retrieve repositories:", error);
@@ -666,6 +806,15 @@ export async function askRepository(req: Request, res: Response) {
                 `[AskRepository][Stage:Complete] Git history answer generated successfully with ${llmResult.citations?.length || 0} citations`
             );
 
+            if (req.user) {
+                try {
+                    await saveUserChatMessage(req.user.id, gitData.repositoryId, "user", query);
+                    await saveUserChatMessage(req.user.id, gitData.repositoryId, "assistant", llmResult.answer, llmResult.citations);
+                } catch (chatErr) {
+                    console.warn("Failed to persist user git chat message to database:", chatErr);
+                }
+            }
+
             return res.json({
                 repositoryId: gitData.repositoryId,
                 query,
@@ -725,6 +874,15 @@ export async function askRepository(req: Request, res: Response) {
 
         currentStage = "Complete";
         console.log(`[AskRepository][Stage:Complete] Code answer generated successfully with ${llmResult.citations?.length || 0} citations using model '${llmResult.model || "default"}'`);
+
+        if (req.user) {
+            try {
+                await saveUserChatMessage(req.user.id, ragResult.repositoryId, "user", query);
+                await saveUserChatMessage(req.user.id, ragResult.repositoryId, "assistant", llmResult.answer, llmResult.citations);
+            } catch (chatErr) {
+                console.warn("Failed to persist user chat message to database:", chatErr);
+            }
+        }
 
         return res.json({
             repositoryId: ragResult.repositoryId,

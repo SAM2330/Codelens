@@ -12,19 +12,20 @@ import {
     getRepositoryFlows,
     getRepositoryFlowById
 } from "../controllers/repositoryController";
+import { optionalAuth, requireRepositoryAccess } from "../middleware/auth";
 
 const router = Router();
 
-router.get("/", getRepositories);
-router.get("/:id/ask", askRepository);
-router.get("/:id/context", getRepositoryContext);
-router.get("/:id/search", searchRepositoryChunks);
-router.get("/:id/chunks", getRepositoryChunks);
-router.get("/:id/files", getRepositoryFiles);
-router.get("/:id/flows/:flowId", getRepositoryFlowById);
-router.get("/:id/flows", getRepositoryFlows);
-router.get("/:id", getRepositoryById);
-router.post("/:id/embed", embedRepositoryChunks);
-router.post("/analyze", analyzeRepository);
+router.get("/", optionalAuth, getRepositories);
+router.get("/:id/ask", optionalAuth, requireRepositoryAccess, askRepository);
+router.get("/:id/context", optionalAuth, requireRepositoryAccess, getRepositoryContext);
+router.get("/:id/search", optionalAuth, requireRepositoryAccess, searchRepositoryChunks);
+router.get("/:id/chunks", optionalAuth, requireRepositoryAccess, getRepositoryChunks);
+router.get("/:id/files", optionalAuth, requireRepositoryAccess, getRepositoryFiles);
+router.get("/:id/flows/:flowId", optionalAuth, requireRepositoryAccess, getRepositoryFlowById);
+router.get("/:id/flows", optionalAuth, requireRepositoryAccess, getRepositoryFlows);
+router.get("/:id", optionalAuth, requireRepositoryAccess, getRepositoryById);
+router.post("/:id/embed", optionalAuth, requireRepositoryAccess, embedRepositoryChunks);
+router.post("/analyze", optionalAuth, analyzeRepository);
 
 export default router;
