@@ -21,11 +21,27 @@ export function analyzeAST(
     fileName: string,
     content: string
 ): ASTAnalysis {
-    const ast = parse(content, {
-        sourceType: "unambiguous",
-        sourceFilename: fileName,
-        plugins: ["typescript", "jsx"]
-    });
+    let ast: any;
+    try {
+        ast = parse(content, {
+            sourceType: "unambiguous",
+            sourceFilename: fileName,
+            plugins: ["typescript", "jsx"]
+        });
+    } catch (parseError) {
+        console.warn(
+            `[ASTAnalyzer] Failed to parse AST for '${fileName}':`,
+            parseError instanceof Error ? parseError.message : parseError
+        );
+        return {
+            functions: [],
+            classes: [],
+            interfaces: [],
+            types: [],
+            imports: [],
+            exports: []
+        };
+    }
 
     const functions: ASTSymbol[] = [];
     const classes: ASTSymbol[] = [];

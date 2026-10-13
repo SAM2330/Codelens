@@ -21,11 +21,25 @@ export function getSupabaseAuthClient(): SupabaseClient | null {
     }
 
     if (!supabaseAuthClient) {
+        let wsTransport: any = undefined;
+        if (typeof globalThis.WebSocket !== "undefined") {
+            wsTransport = globalThis.WebSocket;
+        } else {
+            try {
+                // In Node.js runtimes prior to Node 22, native WebSocket is not global.
+                // Provide ws as the transport implementation for @supabase/realtime-js.
+                wsTransport = require("ws");
+            } catch {
+                // Runtime does not have ws installed
+            }
+        }
+
         supabaseAuthClient = createClient(url, key, {
             auth: {
                 persistSession: false,
                 autoRefreshToken: false
-            }
+            },
+            ...(wsTransport ? { realtime: { transport: wsTransport } } : {})
         });
     }
 
@@ -55,11 +69,11 @@ export async function verifySupabaseToken(token: string): Promise<AuthUser | nul
     }
 
     // 2. Try real Supabase auth if configured
-    const client = getSupabaseAuthClient();
-    if (client) {
-        try {
+    try {
+        const client = getSupabaseAuthClient();
+        if (client) {
             const { data, error } = await client.auth.getUser(token);
-            if (error || !data.user) {
+            if (error || !data?.user) {
                 return null;
             }
             return {
@@ -67,10 +81,12 @@ export async function verifySupabaseToken(token: string): Promise<AuthUser | nul
                 email: data.user.email,
                 role: data.user.role
             };
-        } catch {
-            return null;
         }
+    } catch (err) {
+        console.warn("[Auth] Token verification failed:", err instanceof Error ? err.message : err);
+        return null;
     }
 
     return null;
 }
+

@@ -35,7 +35,8 @@ export function sanitizeSearchLimit(limit?: number | string): number {
 export async function searchSimilarChunks(
     repositoryId: string,
     query: string,
-    limit: number = DEFAULT_SEARCH_LIMIT
+    limit: number = DEFAULT_SEARCH_LIMIT,
+    analysisId?: string
 ): Promise<SearchSimilarChunksResult> {
     const trimmedQuery = query ? query.trim() : "";
     const safeLimit = sanitizeSearchLimit(limit);
@@ -45,7 +46,7 @@ export async function searchSimilarChunks(
     }
 
     // 1. Verify repository exists and whether it has embeddings
-    const check = await hasEmbeddedChunksForRepository(repositoryId);
+    const check = await hasEmbeddedChunksForRepository(repositoryId, analysisId);
 
     if (!check.exists) {
         return {
@@ -91,7 +92,8 @@ export async function searchSimilarChunks(
     const results = await searchSimilarChunksByVector(
         resolvedRepoId,
         queryEmbedding,
-        safeLimit
+        safeLimit,
+        analysisId
     );
 
     return {

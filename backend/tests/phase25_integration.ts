@@ -33,7 +33,9 @@ const TEST_PORT = 5099;
 const BASE_URL = `http://127.0.0.1:${TEST_PORT}`;
 
 const pool = new Pool({
-    connectionString: process.env.DATABASE_URL?.trim()
+    connectionString: process.env.DATABASE_URL?.trim(),
+    connectionTimeoutMillis: 10000,
+    idleTimeoutMillis: 30000
 });
 
 let server: http.Server;
@@ -170,7 +172,8 @@ async function runTests() {
                 SELECT r.id, r.full_name, a.commit_sha 
                 FROM repositories r 
                 JOIN analysis_results a ON r.id = a.repository_id 
-                WHERE r.full_name = 'SAM2330/IMDB' AND a.status = 'completed'
+                WHERE LOWER(r.full_name) = 'sam2330/imdb' AND a.status = 'completed'
+                ORDER BY a.analyzed_at DESC
                 LIMIT 1;
             `);
 

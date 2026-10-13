@@ -24,6 +24,7 @@ export async function initializeDatabase(): Promise<void> {
                     github_url TEXT NOT NULL,
                     default_branch TEXT NOT NULL,
                     description TEXT,
+                    is_private BOOLEAN NOT NULL DEFAULT false,
                     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                 );
@@ -41,11 +42,15 @@ export async function initializeDatabase(): Promise<void> {
                     static_analysis JSONB,
                     security_analysis JSONB,
                     raw_repository JSONB,
+                    commit_sha TEXT,
+                    status TEXT NOT NULL DEFAULT 'completed',
+                    indexing_version TEXT NOT NULL DEFAULT '1.0',
                     analyzed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                 );
 
                 CREATE INDEX IF NOT EXISTS idx_analysis_results_repo_id ON analysis_results(repository_id);
                 CREATE INDEX IF NOT EXISTS idx_analysis_results_analyzed_at ON analysis_results(analyzed_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_analysis_results_cache ON analysis_results(repository_id, commit_sha, status);
 
                 CREATE TABLE IF NOT EXISTS analyzed_files (
                     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -162,6 +167,44 @@ export async function initializeDatabase(): Promise<void> {
                 CREATE INDEX IF NOT EXISTS idx_code_chunks_file_path ON code_chunks(analysis_id, file_path);
                 CREATE INDEX IF NOT EXISTS idx_code_chunks_repo_id ON code_chunks(repository_id);
                 CREATE INDEX IF NOT EXISTS idx_code_chunks_embedding_cosine ON code_chunks USING hnsw (embedding vector_cosine_ops);
+
+                CREATE TABLE IF NOT EXISTS user_repositories (
+                    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                    user_id UUID NOT NULL,
+                    repository_id UUID NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+                    role TEXT NOT NULL DEFAULT 'owner',
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    UNIQUE (user_id, repository_id)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_user_repos_user_id ON user_repositories(user_id);
+                CREATE INDEX IF NOT EXISTS idx_user_repos_repo_id ON user_repositories(repository_id);
+
+                CREATE TABLE IF NOT EXISTS user_chat_messages (
+                    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                    user_id UUID NOT NULL,
+                    repository_id UUID NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+                    role TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
+                    content TEXT NOT NULL,
+                    citations JSONB DEFAULT '[]'::jsonb,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_user_chat_lookup ON user_chat_messages(user_id, repository_id, created_at);
+
+                ALTER TABLE user_chat_messages ENABLE ROW LEVEL SECURITY;
+                DROP POLICY IF EXISTS user_chat_messages_owner_policy ON user_chat_messages;
+                CREATE POLICY user_chat_messages_owner_policy ON user_chat_messages
+                    FOR ALL
+                    USING (auth.uid() = user_id)
+                    WITH CHECK (auth.uid() = user_id);
+
+                ALTER TABLE user_repositories ENABLE ROW LEVEL SECURITY;
+                DROP POLICY IF EXISTS user_repositories_owner_policy ON user_repositories;
+                CREATE POLICY user_repositories_owner_policy ON user_repositories
+                    FOR ALL
+                    USING (auth.uid() = user_id)
+                    WITH CHECK (auth.uid() = user_id);
             `;
         }
 
@@ -208,6 +251,20 @@ export async function initializeDatabase(): Promise<void> {
                 created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
             );
             CREATE INDEX IF NOT EXISTS idx_user_chat_lookup ON user_chat_messages(user_id, repository_id, created_at);
+
+            ALTER TABLE user_chat_messages ENABLE ROW LEVEL SECURITY;
+            DROP POLICY IF EXISTS user_chat_messages_owner_policy ON user_chat_messages;
+            CREATE POLICY user_chat_messages_owner_policy ON user_chat_messages
+                FOR ALL
+                USING (auth.uid() = user_id)
+                WITH CHECK (auth.uid() = user_id);
+
+            ALTER TABLE user_repositories ENABLE ROW LEVEL SECURITY;
+            DROP POLICY IF EXISTS user_repositories_owner_policy ON user_repositories;
+            CREATE POLICY user_repositories_owner_policy ON user_repositories
+                FOR ALL
+                USING (auth.uid() = user_id)
+                WITH CHECK (auth.uid() = user_id);
         `);
 
         console.log("Database schema initialized successfully.");

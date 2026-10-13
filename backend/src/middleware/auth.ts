@@ -32,26 +32,34 @@ function extractToken(req: Request): string | null {
  * Returns 401 Unauthorized if the token is missing, invalid, or expired.
  */
 export async function requireAuth(req: Request, res: Response, next: NextFunction) {
-    const token = extractToken(req);
+    try {
+        const token = extractToken(req);
 
-    if (!token) {
-        return res.status(401).json({
-            message: "Authentication required",
-            error: "Missing or invalid authorization header"
-        });
-    }
+        if (!token) {
+            return res.status(401).json({
+                message: "Authentication required",
+                error: "Missing or invalid authorization header"
+            });
+        }
 
-    const user = await verifySupabaseToken(token);
+        const user = await verifySupabaseToken(token);
 
-    if (!user) {
+        if (!user) {
+            return res.status(401).json({
+                message: "Authentication failed",
+                error: "Invalid or expired access token"
+            });
+        }
+
+        req.user = user;
+        next();
+    } catch (err) {
+        console.warn("[Auth] requireAuth caught error during verification:", err instanceof Error ? err.message : err);
         return res.status(401).json({
             message: "Authentication failed",
             error: "Invalid or expired access token"
         });
     }
-
-    req.user = user;
-    next();
 }
 
 /**
@@ -59,13 +67,17 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
  * but allows unauthenticated access for public endpoints.
  */
 export async function optionalAuth(req: Request, res: Response, next: NextFunction) {
-    const token = extractToken(req);
+    try {
+        const token = extractToken(req);
 
-    if (token) {
-        const user = await verifySupabaseToken(token);
-        if (user) {
-            req.user = user;
+        if (token) {
+            const user = await verifySupabaseToken(token);
+            if (user) {
+                req.user = user;
+            }
         }
+    } catch (err) {
+        console.warn("[Auth] optionalAuth token verification warning:", err);
     }
 
     next();

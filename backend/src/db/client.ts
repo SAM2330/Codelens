@@ -4,12 +4,15 @@ import dotenv from "dotenv";
 dotenv.config();
 
 function getPoolConfig(): PoolConfig {
-    const databaseUrl = process.env.DATABASE_URL;
+    const databaseUrl = process.env.DATABASE_URL?.trim() || process.env.SUPABASE_DB_URL?.trim();
 
     if (databaseUrl) {
         const isLocalhost = databaseUrl.includes("localhost") || databaseUrl.includes("127.0.0.1");
         return {
             connectionString: databaseUrl,
+            max: 10,
+            connectionTimeoutMillis: 10000,
+            idleTimeoutMillis: 30000,
             ssl: isLocalhost
                 ? false
                 : {
@@ -18,16 +21,18 @@ function getPoolConfig(): PoolConfig {
         };
     }
 
-    const isLocalhost =
-        (process.env.PGHOST || "localhost") === "localhost" ||
-        process.env.PGHOST === "127.0.0.1";
+    const host = (process.env.PGHOST || "localhost").trim();
+    const isLocalhost = host === "localhost" || host === "127.0.0.1";
 
     return {
-        host: process.env.PGHOST || "localhost",
+        host,
         port: parseInt(process.env.PGPORT || "5432", 10),
-        user: process.env.PGUSER || "postgres",
+        user: (process.env.PGUSER || "postgres").trim(),
         password: process.env.PGPASSWORD || "",
-        database: process.env.PGDATABASE || "postgres",
+        database: (process.env.PGDATABASE || "postgres").trim(),
+        max: 10,
+        connectionTimeoutMillis: 10000,
+        idleTimeoutMillis: 30000,
         ssl: isLocalhost
             ? false
             : {
@@ -43,7 +48,7 @@ export function getPool(): Pool {
         pool = new Pool(getPoolConfig());
 
         pool.on("error", (err) => {
-            console.error("Unexpected error on idle PostgreSQL client", err);
+            console.error("Unexpected error on idle PostgreSQL client:", err?.message || "Unknown error");
         });
     }
     return pool;

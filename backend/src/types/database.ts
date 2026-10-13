@@ -115,9 +115,25 @@ export interface EmbeddingSummary {
     message?: string;
 }
 
+export interface ExactSearchResult {
+    id: string;
+    repositoryId: string;
+    analysisId?: string;
+    filePath: string;
+    language: string;
+    symbol: string;
+    symbolType: string;
+    startLine: number;
+    endLine: number;
+    content: string;
+    similarity: number;
+    matchType: "exact_symbol" | "exact_file" | "partial_symbol" | "partial_file";
+}
+
 export interface VectorSearchResult {
     id: string;
     repositoryId: string;
+    analysisId?: string;
     filePath: string;
     language: string;
     symbol: string;
@@ -135,6 +151,20 @@ export interface VectorSearchResponse {
     message?: string;
 }
 
+export interface KeywordSearchResult {
+    id: string;
+    repositoryId: string;
+    analysisId?: string;
+    filePath: string;
+    language: string;
+    symbol: string;
+    symbolType: string;
+    startLine: number;
+    endLine: number;
+    content: string;
+    rank: number;
+}
+
 export interface RagSource {
     chunkId: string;
     filePath: string;
@@ -145,12 +175,20 @@ export interface RagSource {
     language: string;
     similarity: number;
     content: string;
+    matchType?: "exact_symbol" | "exact_file" | "partial_symbol" | "partial_file" | "vector" | "keyword" | "hybrid";
+    rrfScore?: number;
+    matchLanes?: ("exact" | "keyword" | "vector")[];
 }
 
 export interface RagOptions {
     candidateLimit?: number;
     maxChunks?: number;
     similarityThreshold?: number;
+    analysisId?: string;
+    disableExactSearch?: boolean;
+    disableVectorSearch?: boolean;
+    disableKeywordSearch?: boolean;
+    rrfK?: number;
 }
 
 export interface RagContextResult {
@@ -163,6 +201,7 @@ export interface RagContextResult {
     hasNoEmbeddings?: boolean;
     quotaExceeded?: boolean;
     message?: string;
+    analysisId?: string;
 }
 
 export interface Citation {

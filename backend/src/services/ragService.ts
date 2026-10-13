@@ -1,5 +1,16 @@
-import { searchSimilarChunks } from "./vectorSearchService";
-import { RagOptions, RagContextResult, RagSource } from "../types/database";
+import { searchSimilarChunks, SearchSimilarChunksResult } from "./vectorSearchService";
+import {
+    searchChunksByExactMetadata,
+    searchChunksByKeyword
+} from "../db/repositories/repositoryDb";
+import {
+    RagOptions,
+    RagContextResult,
+    RagSource,
+    ExactSearchResult,
+    KeywordSearchResult
+} from "../types/database";
+import { fuseWithRrf } from "./rrfService";
 
 export const DEFAULT_CANDIDATE_LIMIT = 12;
 export const DEFAULT_MAX_CHUNKS = 6;
@@ -48,14 +59,69 @@ export async function retrieveContext(
 
     const threshold = options?.similarityThreshold ?? DEFAULT_SIMILARITY_THRESHOLD;
 
-    // 1. Retrieve candidates from vector search
-    const searchResult = await searchSimilarChunks(
-        repositoryId,
-        trimmedQuery,
-        candidateLimit
-    );
+    // 1. Lane A: Retrieve exact metadata candidates (exact symbol and file path matches without Gemini embedding call)
+    let exactMatches: ExactSearchResult[] = [];
+    if (!options?.disableExactSearch) {
+        try {
+            exactMatches = await searchChunksByExactMetadata(
+                repositoryId,
+                trimmedQuery,
+                {
+                    limit: candidateLimit,
+                    analysisId: options?.analysisId
+                }
+            );
+        } catch (exactErr) {
+            console.warn(
+                "[RAG][Lane:Exact] Exact metadata search failed, continuing with other lanes:",
+                exactErr
+            );
+        }
+    }
 
-    if (searchResult.notFound) {
+    // 2. Lane B: Retrieve keyword full-text search candidates (PostgreSQL FTS without Gemini embedding call)
+    let keywordMatches: KeywordSearchResult[] = [];
+    if (!options?.disableKeywordSearch) {
+        try {
+            keywordMatches = await searchChunksByKeyword(
+                repositoryId,
+                trimmedQuery,
+                {
+                    limit: candidateLimit,
+                    analysisId: options?.analysisId
+                }
+            );
+        } catch (kwErr) {
+            console.warn(
+                "[RAG][Lane:Keyword] Keyword full-text search failed, continuing with other lanes:",
+                kwErr
+            );
+        }
+    }
+
+    // 3. Lane C: Retrieve semantic candidates from vector search
+    let searchResult: SearchSimilarChunksResult | null = null;
+    let vectorError: unknown = null;
+
+    if (!options?.disableVectorSearch) {
+        try {
+            searchResult = await searchSimilarChunks(
+                repositoryId,
+                trimmedQuery,
+                candidateLimit,
+                options?.analysisId
+            );
+        } catch (err: unknown) {
+            vectorError = err;
+            console.warn(
+                "[RAG][Lane:Vector] Vector search failed or hit quota, continuing with lexical lanes:",
+                err
+            );
+        }
+    }
+
+    // 4. Handle repository not found
+    if (searchResult?.notFound) {
         return {
             repositoryId,
             query: trimmedQuery,
@@ -67,58 +133,66 @@ export async function retrieveContext(
         };
     }
 
-    if (searchResult.hasNoEmbeddings) {
-        return {
-            repositoryId: searchResult.repositoryId,
-            query: trimmedQuery,
-            context: "",
-            sourceCount: 0,
-            sources: [],
-            hasNoEmbeddings: true,
-            message: "No relevant embedded code chunks were found."
-        };
+    const resolvedRepoId = searchResult?.repositoryId || repositoryId;
+
+    // 5. Handle vector search unavailability / errors with lexical lanes fallback
+    const hasLexicalCandidates = exactMatches.length > 0 || keywordMatches.length > 0;
+
+    if (!hasLexicalCandidates) {
+        if (searchResult?.hasNoEmbeddings) {
+            return {
+                repositoryId: resolvedRepoId,
+                query: trimmedQuery,
+                context: "",
+                sourceCount: 0,
+                sources: [],
+                hasNoEmbeddings: true,
+                message: "No relevant embedded code chunks were found."
+            };
+        }
+
+        if (searchResult?.quotaExceeded || (vectorError as any)?.isQuotaError) {
+            return {
+                repositoryId: resolvedRepoId,
+                query: trimmedQuery,
+                context: "",
+                sourceCount: 0,
+                sources: [],
+                quotaExceeded: true,
+                message:
+                    searchResult?.message ||
+                    "Gemini API quota exceeded (429 RESOURCE_EXHAUSTED). Please try again later."
+            };
+        }
+
+        if (vectorError) {
+            throw vectorError;
+        }
     }
 
-    if (searchResult.quotaExceeded) {
-        return {
-            repositoryId: searchResult.repositoryId,
-            query: trimmedQuery,
-            context: "",
-            sourceCount: 0,
-            sources: [],
-            quotaExceeded: true,
-            message:
-                searchResult.message ||
-                "Gemini API quota exceeded (429 RESOURCE_EXHAUSTED). Please try again later."
-        };
-    }
-
-    // 2. Filter candidates by similarity threshold and select top maxChunks
-    const candidates = searchResult.results || [];
-    const filteredCandidates = candidates.filter(
+    // 6. Filter vector candidates by similarity threshold
+    const vectorCandidates = searchResult?.results || [];
+    const passingVectorCandidates = vectorCandidates.filter(
         (item) => item.similarity >= threshold
     );
 
-    const selectedResults = filteredCandidates.slice(0, maxChunks);
+    // 7. Combine all 3 lanes using Reciprocal Rank Fusion (RRF)
+    const selectedSources = fuseWithRrf(
+        exactMatches,
+        keywordMatches,
+        passingVectorCandidates,
+        {
+            k: options?.rrfK,
+            maxChunks
+        }
+    );
 
-    const sources: RagSource[] = selectedResults.map((item) => ({
-        chunkId: item.id,
-        filePath: item.filePath,
-        symbol: item.symbol,
-        symbolType: item.symbolType,
-        startLine: item.startLine,
-        endLine: item.endLine,
-        language: item.language,
-        similarity: item.similarity,
-        content: item.content
-    }));
+    // 8. Format structured LLM-ready context string
+    const context = formatRagContext(selectedSources);
 
-    // 3. Format structured LLM-ready context string
-    const context = formatRagContext(sources);
-
-    if (sources.length === 0) {
+    if (selectedSources.length === 0) {
         return {
-            repositoryId: searchResult.repositoryId,
+            repositoryId: resolvedRepoId,
             query: trimmedQuery,
             context: "",
             sourceCount: 0,
@@ -128,10 +202,11 @@ export async function retrieveContext(
     }
 
     return {
-        repositoryId: searchResult.repositoryId,
+        repositoryId: resolvedRepoId,
         query: trimmedQuery,
         context,
-        sourceCount: sources.length,
-        sources
+        sourceCount: selectedSources.length,
+        sources: selectedSources,
+        analysisId: options?.analysisId
     };
 }

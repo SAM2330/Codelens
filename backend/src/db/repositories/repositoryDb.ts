@@ -7,6 +7,8 @@ import {
     AnalyzedFileContentDTO,
     CodeChunk,
     VectorSearchResult,
+    ExactSearchResult,
+    KeywordSearchResult,
     StoredCodeFlow,
     GitAnalysis
 } from "../../types/database";
@@ -14,6 +16,10 @@ import {
     computeContentHash,
     formatChunkForEmbedding
 } from "../../services/embeddingService";
+import {
+    extractExactSearchTerms,
+    scoreAndRankExactCandidates
+} from "../../services/exactSearchService";
 
 export interface UpsertRepositoryInput {
     githubId: number;
@@ -736,10 +742,225 @@ export async function saveChunkEmbeddings(
     }
 }
 
+export async function getActiveAnalysisId(
+    repositoryId: string
+): Promise<string | null> {
+    const pool = getPool();
+
+    const repoRes = await pool.query(
+        `SELECT id FROM repositories 
+         WHERE id::text = $1 OR full_name = $1 OR github_id::text = $1
+         LIMIT 1`,
+        [repositoryId]
+    );
+
+    if (repoRes.rows.length === 0) {
+        return null;
+    }
+
+    const resolvedRepoId = repoRes.rows[0].id;
+
+    // Get latest completed analysis record
+    const analysisRes = await pool.query(
+        `SELECT id FROM analysis_results 
+         WHERE repository_id = $1 AND (status IS NULL OR status = 'completed')
+         ORDER BY analyzed_at DESC 
+         LIMIT 1`,
+        [resolvedRepoId]
+    );
+
+    if (analysisRes.rows.length > 0) {
+        return analysisRes.rows[0].id;
+    }
+
+    // Fallback: any analysis result for this repo if none has status completed
+    const fallbackRes = await pool.query(
+        `SELECT id FROM analysis_results 
+         WHERE repository_id = $1 
+         ORDER BY analyzed_at DESC 
+         LIMIT 1`,
+        [resolvedRepoId]
+    );
+
+    return fallbackRes.rows[0]?.id || null;
+}
+
+export async function searchChunksByExactMetadata(
+    repositoryId: string,
+    query: string,
+    options?: {
+        limit?: number;
+        analysisId?: string;
+    }
+): Promise<ExactSearchResult[]> {
+    const pool = getPool();
+
+    const repoRes = await pool.query(
+        `SELECT id FROM repositories 
+         WHERE id::text = $1 OR full_name = $1 OR github_id::text = $1
+         LIMIT 1`,
+        [repositoryId]
+    );
+
+    if (repoRes.rows.length === 0) {
+        return [];
+    }
+
+    const resolvedRepoId = repoRes.rows[0].id;
+    const terms = extractExactSearchTerms(query);
+
+    if (terms.symbols.length === 0 && terms.filePaths.length === 0) {
+        return [];
+    }
+
+    const activeAnalysisId =
+        options?.analysisId || (await getActiveAnalysisId(resolvedRepoId));
+
+    // Prepare search patterns
+    const exactSymbols = terms.symbols.map((s) => s.toLowerCase());
+    const methodPatterns = terms.symbols.map((s) => `%.${s.toLowerCase()}`);
+    const classPrefixPatterns = terms.symbols.map((s) => `${s.toLowerCase()}.%`);
+    const allSymbolPatterns = [...methodPatterns, ...classPrefixPatterns];
+
+    const exactPaths = terms.filePaths.map((f) => f.toLowerCase());
+    const pathSuffixPatterns = terms.filePaths.map((f) => `%/${f.toLowerCase()}`);
+
+    const partialSymbols = terms.symbols
+        .filter((s) => s.length >= 3)
+        .map((s) => `%${s.toLowerCase()}%`);
+
+    const limit = Math.max(1, Math.min(options?.limit ?? 12, 30));
+
+    // Execute query with active analysis isolation if available
+    const sql = `
+        SELECT
+            id,
+            repository_id as "repositoryId",
+            analysis_id as "analysisId",
+            file_path as "filePath",
+            language,
+            symbol,
+            symbol_type as "symbolType",
+            start_line as "startLine",
+            end_line as "endLine",
+            content
+        FROM code_chunks
+        WHERE repository_id = $1
+          AND ($2::uuid IS NULL OR analysis_id = $2::uuid)
+          AND (
+              LOWER(symbol) = ANY($3::text[])
+              OR LOWER(symbol) LIKE ANY($4::text[])
+              OR LOWER(file_path) = ANY($5::text[])
+              OR LOWER(file_path) LIKE ANY($6::text[])
+              OR (cardinality($7::text[]) > 0 AND LOWER(symbol) LIKE ANY($7::text[]))
+          )
+        LIMIT $8;
+    `;
+
+    const result = await pool.query(sql, [
+        resolvedRepoId,
+        activeAnalysisId,
+        exactSymbols,
+        allSymbolPatterns,
+        exactPaths,
+        pathSuffixPatterns,
+        partialSymbols,
+        limit * 2
+    ]);
+
+    return scoreAndRankExactCandidates(result.rows, terms, limit);
+}
+
+export async function searchChunksByKeyword(
+    repositoryId: string,
+    query: string,
+    options?: {
+        limit?: number;
+        analysisId?: string;
+    }
+): Promise<KeywordSearchResult[]> {
+    const pool = getPool();
+
+    const repoRes = await pool.query(
+        `SELECT id FROM repositories 
+         WHERE id::text = $1 OR full_name = $1 OR github_id::text = $1
+         LIMIT 1`,
+        [repositoryId]
+    );
+
+    if (repoRes.rows.length === 0) {
+        return [];
+    }
+
+    const resolvedRepoId = repoRes.rows[0].id;
+    const cleanQuery = (query || "").trim();
+    if (!cleanQuery) {
+        return [];
+    }
+
+    const activeAnalysisId =
+        options?.analysisId || (await getActiveAnalysisId(resolvedRepoId));
+
+    const limit = Math.max(1, Math.min(options?.limit ?? 12, 30));
+
+    // Execute PostgreSQL Full-Text Search strictly scoped to active analysis
+    const sql = `
+        SELECT
+            id,
+            repository_id as "repositoryId",
+            analysis_id as "analysisId",
+            file_path as "filePath",
+            language,
+            symbol,
+            symbol_type as "symbolType",
+            start_line as "startLine",
+            end_line as "endLine",
+            content,
+            ts_rank_cd(
+                to_tsvector('english', coalesce(symbol, '') || ' ' || coalesce(file_path, '') || ' ' || coalesce(content, '')),
+                plainto_tsquery('english', $3)
+            ) as rank
+        FROM code_chunks
+        WHERE repository_id = $1
+          AND ($2::uuid IS NULL OR analysis_id = $2::uuid)
+          AND to_tsvector('english', coalesce(symbol, '') || ' ' || coalesce(file_path, '') || ' ' || coalesce(content, ''))
+              @@ plainto_tsquery('english', $3)
+        ORDER BY rank DESC, file_path ASC, start_line ASC
+        LIMIT $4;
+    `;
+
+    try {
+        const result = await pool.query(sql, [
+            resolvedRepoId,
+            activeAnalysisId,
+            cleanQuery,
+            limit
+        ]);
+
+        return result.rows.map((row) => ({
+            id: row.id,
+            repositoryId: row.repositoryId,
+            analysisId: row.analysisId,
+            filePath: row.filePath,
+            language: row.language,
+            symbol: row.symbol,
+            symbolType: row.symbolType,
+            startLine: row.startLine,
+            endLine: row.endLine,
+            content: row.content,
+            rank: parseFloat(row.rank) || 0
+        }));
+    } catch (err) {
+        console.warn("[KeywordSearch] Full text search query error:", err);
+        return [];
+    }
+}
+
 export async function searchSimilarChunksByVector(
     repositoryId: string,
     queryEmbedding: number[],
-    limit: number = 8
+    limit: number = 8,
+    analysisId?: string
 ): Promise<VectorSearchResult[] | null> {
     const pool = getPool();
 
@@ -756,13 +977,16 @@ export async function searchSimilarChunksByVector(
     }
 
     const resolvedRepoId = repoRes.rows[0].id;
+    const activeAnalysisId =
+        analysisId || (await getActiveAnalysisId(resolvedRepoId));
     const vectorStr = `[${queryEmbedding.join(",")}]`;
 
-    // 2. Perform cosine similarity vector search
+    // 2. Perform cosine similarity vector search scoped to active analysis
     const query = `
         SELECT
             id,
             repository_id as "repositoryId",
+            analysis_id as "analysisId",
             file_path as "filePath",
             language,
             symbol,
@@ -773,15 +997,23 @@ export async function searchSimilarChunksByVector(
             (1 - (embedding <=> $1::vector)) AS similarity
         FROM code_chunks
         WHERE repository_id = $2
+          AND ($4::uuid IS NULL OR analysis_id = $4::uuid)
           AND embedding IS NOT NULL
         ORDER BY embedding <=> $1::vector ASC
         LIMIT $3;
     `;
 
-    const result = await pool.query(query, [vectorStr, resolvedRepoId, limit]);
+    const result = await pool.query(query, [
+        vectorStr,
+        resolvedRepoId,
+        limit,
+        activeAnalysisId
+    ]);
+
     return result.rows.map((row) => ({
         id: row.id,
         repositoryId: row.repositoryId,
+        analysisId: row.analysisId,
         filePath: row.filePath,
         language: row.language,
         symbol: row.symbol,
@@ -794,8 +1026,9 @@ export async function searchSimilarChunksByVector(
 }
 
 export async function hasEmbeddedChunksForRepository(
-    repositoryId: string
-): Promise<{ exists: boolean; hasEmbeddings: boolean; repoId?: string }> {
+    repositoryId: string,
+    analysisId?: string
+): Promise<{ exists: boolean; hasEmbeddings: boolean; repoId?: string; activeAnalysisId?: string }> {
     const pool = getPool();
 
     const repoRes = await pool.query(
@@ -810,7 +1043,27 @@ export async function hasEmbeddedChunksForRepository(
     }
 
     const resolvedRepoId = repoRes.rows[0].id;
+    const resolvedAnalysisId =
+        analysisId || (await getActiveAnalysisId(resolvedRepoId)) || undefined;
 
+    // Check count for active analysis first if present
+    if (resolvedAnalysisId) {
+        const countRes = await pool.query(
+            `SELECT COUNT(*) as count 
+             FROM code_chunks 
+             WHERE repository_id = $1 AND analysis_id = $2 AND embedding IS NOT NULL`,
+            [resolvedRepoId, resolvedAnalysisId]
+        );
+        const count = parseInt(countRes.rows[0].count || "0", 10);
+        return {
+            exists: true,
+            hasEmbeddings: count > 0,
+            repoId: resolvedRepoId,
+            activeAnalysisId: resolvedAnalysisId
+        };
+    }
+
+    // Fallback: check across whole repository only if no analysis was found
     const countRes = await pool.query(
         `SELECT COUNT(*) as count 
          FROM code_chunks 
@@ -819,7 +1072,12 @@ export async function hasEmbeddedChunksForRepository(
     );
 
     const count = parseInt(countRes.rows[0].count || "0", 10);
-    return { exists: true, hasEmbeddings: count > 0, repoId: resolvedRepoId };
+    return {
+        exists: true,
+        hasEmbeddings: count > 0,
+        repoId: resolvedRepoId,
+        activeAnalysisId: resolvedAnalysisId
+    };
 }
 
 export async function getStoredCodeFlowsByRepositoryId(
