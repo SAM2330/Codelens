@@ -37,8 +37,8 @@ const SUGGESTED_PROMPTS = [
         prompt: "What changed between the last two commits?"
     },
     {
-        title: "Streaming System Commits",
-        prompt: "Show commits that changed the streaming system."
+        title: "API Endpoints & Routes",
+        prompt: "What API endpoints and route handlers are implemented in this project?"
     },
     {
         title: "Architecture Overview",
@@ -99,7 +99,7 @@ export const ChatPage: React.FC = () => {
     const [isLoading, setIsLoading] = useState(false);
     const [initialLoading, setInitialLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
-    
+
     const messagesEndRef = useRef<HTMLDivElement | null>(null);
     const textareaRef = useRef<HTMLTextAreaElement | null>(null);
     const isSubmittingRef = useRef<boolean>(false);
@@ -277,7 +277,7 @@ export const ChatPage: React.FC = () => {
 
             console.error("Chat question failed:", err);
             const errorMessage = err instanceof Error ? err.message : "Failed to get AI answer";
-            
+
             const errorAssistantMessage: ChatMessage = {
                 id: assistantMessageId,
                 role: "assistant",
@@ -413,9 +413,8 @@ export const ChatPage: React.FC = () => {
                         {messages.map((message) => (
                             <div
                                 key={message.id}
-                                className={`chat-message-row ${
-                                    message.role === "user" ? "user-row" : "assistant-row"
-                                }`}
+                                className={`chat-message-row ${message.role === "user" ? "user-row" : "assistant-row"
+                                    }`}
                             >
                                 <div className="chat-avatar">
                                     {message.role === "user" ? (
@@ -449,24 +448,24 @@ export const ChatPage: React.FC = () => {
                                                     {message.errorMessage || "An unexpected error occurred."}
                                                 </div>
                                                 {(message.errorMessage?.toLowerCase().includes("high demand") ||
-                                                  message.errorMessage?.toLowerCase().includes("unavailable") ||
-                                                  message.errorMessage?.includes("503")) ? (
+                                                    message.errorMessage?.toLowerCase().includes("unavailable") ||
+                                                    message.errorMessage?.includes("503")) ? (
                                                     <div className="text-xs text-amber-300/90 mt-2 bg-amber-950/40 p-2 rounded border border-amber-800/40">
                                                         Note: The AI model is currently experiencing temporary high traffic. Please wait a moment and retry.
                                                     </div>
                                                 ) : (message.errorMessage?.toLowerCase().includes("quota") ||
-                                                     message.errorMessage?.toLowerCase().includes("rate limit") ||
-                                                     message.errorMessage?.includes("429")) ? (
+                                                    message.errorMessage?.toLowerCase().includes("rate limit") ||
+                                                    message.errorMessage?.includes("429")) ? (
                                                     <div className="text-xs text-amber-300/90 mt-2 bg-amber-950/40 p-2 rounded border border-amber-800/40">
                                                         Note: Gemini API free-tier rate limits reset every minute. Please wait a moment and try again.
                                                     </div>
                                                 ) : ((message.errorMessage?.toLowerCase().includes("time") && message.errorMessage?.toLowerCase().includes("out")) ||
-                                                     message.errorMessage?.includes("504")) ? (
+                                                    message.errorMessage?.includes("504")) ? (
                                                     <div className="text-xs text-amber-300/90 mt-2 bg-amber-950/40 p-2 rounded border border-amber-800/40">
                                                         Note: The AI request timed out before completing. Please try asking again.
                                                     </div>
                                                 ) : (message.errorMessage?.toLowerCase().includes("retrieval") ||
-                                                     message.errorMessage?.toLowerCase().includes("retrieve")) ? (
+                                                    message.errorMessage?.toLowerCase().includes("retrieve")) ? (
                                                     <div className="text-xs text-amber-300/90 mt-2 bg-amber-950/40 p-2 rounded border border-amber-800/40">
                                                         Note: Could not retrieve relevant context for this repository query.
                                                     </div>
