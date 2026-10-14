@@ -3,13 +3,13 @@ import { Citation, LlmAnswer, RagSource } from "../types/database";
 import { isQuotaExceededError } from "./embeddingService";
 
 export const DEFAULT_GEMINI_CHAT_MODEL =
-    process.env.GEMINI_CHAT_MODEL || "gemini-2.5-flash";
+    process.env.GEMINI_CHAT_MODEL || "gemini-flash-lite-latest";
 
 export const FALLBACK_GEMINI_CHAT_MODELS = [
     DEFAULT_GEMINI_CHAT_MODEL,
-    "gemini-2.5-flash",
-    "gemini-2.0-flash",
-    "gemini-1.5-flash",
+    "gemini-flash-lite-latest",
+    "gemini-3.5-flash-lite",
+    "gemini-3.8-flash",
     "gemini-flash-latest"
 ].filter((m, idx, arr) => arr.indexOf(m) === idx);
 
